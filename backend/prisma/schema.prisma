@@ -1,0 +1,261 @@
+// Humanoid backend — Prisma schema.
+//
+// Scoped to what the frontend currently presents as real: accounts, sessions,
+// organizations/workspaces, onboarding, and the AI employee configuration
+// record onboarding produces. Table shapes follow `database.md` closely for
+// the tables implemented here. Everything database.md describes that has no
+// real frontend feature yet (conversations, knowledge, workflows,
+// integrations, billing) is intentionally NOT modelled here — adding tables
+// nothing reads or writes would just be more fake surface area. Add them when
+// the feature they back is real, not before.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────── identity
+
+model Organization {
+  id                String   @id @default(cuid())
+  name              String
+  slug              String   @unique
+  status            String   @default("active")
+  billingCustomerId String?  @map("billing_customer_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  workspaces Workspace[]
+
+  @@map("organizations")
+}
+
+model Workspace {
+  id             String   @id @default(cuid())
+  organizationId String   @map("organization_id")
+  name           String
+  slug           String   @unique
+  industryKey    String?  @map("industry_key")
+  timezone       String   @default("Europe/London")
+  locale         String   @default("en-GB")
+  status         String   @default("active")
+  settingsJson   Json     @default("{}") @map("settings_json")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships         WorkspaceMembership[]
+  onboardingSession   OnboardingSession?
+  aiEmployees          AiEmployee[]
+  auditEvents          AuditEvent[]
+  roles                Role[]
+
+  @@index([organizationId])
+  @@map("workspaces")
+}
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  passwordHash    String    @map("password_hash")
+  name            String
+  avatarUrl       String?   @map("avatar_url")
+  status          String    @default("pending_verification")
+  emailVerifiedAt DateTime? @map("email_verified_at")
+  lastLoginAt     DateTime? @map("last_login_at")
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  memberships   WorkspaceMembership[]
+  refreshTokens RefreshToken[]
+  otpCodes      OtpCode[]
+
+  @@map("users")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  workspaceId String?  @map("workspace_id")
+  key         String
+  name        String
+  description String?
+  isSystem    Boolean  @default(true) @map("is_system")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace       Workspace?            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  memberships     WorkspaceMembership[]
+  rolePermissions RolePermission[]
+
+  @@unique([workspaceId, key])
+  @@map("roles")
+}
+
+model Permission {
+  id          String @id @default(cuid())
+  key         String @unique
+  description String?
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model WorkspaceMembership {
+  id          String   @id @default(cuid())
+  workspaceId String   @map("workspace_id")
+  userId      String   @map("user_id")
+  roleId      String   @map("role_id")
+  status      String   @default("active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role      @relation(fields: [roleId], references: [id])
+
+  @@unique([workspaceId, userId])
+  @@map("workspace_memberships")
+}
+
+// ────────────────────────────────────────────────────────────────── auth
+
+model RefreshToken {
+  id           String    @id @default(cuid())
+  userId       String    @map("user_id")
+  tokenHash    String    @unique @map("token_hash")
+  userAgent    String?   @map("user_agent")
+  ipHash       String?   @map("ip_hash")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  expiresAt    DateTime  @map("expires_at")
+  revokedAt    DateTime? @map("revoked_at")
+  replacedById String?   @map("replaced_by_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model OtpCode {
+  id           String    @id @default(cuid())
+  userId       String?   @map("user_id")
+  email        String
+  codeHash     String    @map("code_hash")
+  purpose      String
+  expiresAt    DateTime  @map("expires_at")
+  consumedAt   DateTime? @map("consumed_at")
+  attemptCount Int       @default(0) @map("attempt_count")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, purpose])
+  @@map("otp_codes")
+}
+
+// ───────────────────────────────────────────────────────────── onboarding
+
+model OnboardingSession {
+  id                String    @id @default(cuid())
+  workspaceId       String    @unique @map("workspace_id")
+  status            String    @default("in_progress")
+  industryKey       String?   @map("industry_key")
+  organizationJson  Json      @default("{}") @map("organization_json")
+  completedSections String[]  @default([]) @map("completed_sections")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+  completedAt       DateTime? @map("completed_at")
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  answers   OnboardingAnswer[]
+
+  @@map("onboarding_sessions")
+}
+
+model OnboardingAnswer {
+  id                  String   @id @default(cuid())
+  onboardingSessionId String   @map("onboarding_session_id")
+  questionId          String   @map("question_id")
+  valueJson            Json     @map("value_json")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  onboardingSession OnboardingSession @relation(fields: [onboardingSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([onboardingSessionId, questionId])
+  @@map("onboarding_answers")
+}
+
+// ───────────────────────────────────────────────────────────── AI employee
+
+model AiEmployee {
+  id                             String   @id @default(cuid())
+  workspaceId                    String   @map("workspace_id")
+  name                            String
+  roleName                        String   @map("role_name")
+  status                          String   @default("draft")
+  defaultLanguage                 String   @default("en-GB") @map("default_language")
+  timezone                        String   @default("Europe/London")
+  currentConfigurationVersionId   String?  @map("current_configuration_version_id")
+  createdAt                       DateTime @default(now()) @map("created_at")
+  updatedAt                       DateTime @updatedAt @map("updated_at")
+
+  workspace              Workspace                        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  configurationVersions   AiEmployeeConfigurationVersion[] @relation("EmployeeVersions")
+
+  @@index([workspaceId])
+  @@map("ai_employees")
+}
+
+model AiEmployeeConfigurationVersion {
+  id                  String    @id @default(cuid())
+  aiEmployeeId        String    @map("ai_employee_id")
+  versionNumber        Int       @map("version_number")
+  status               String    @default("draft")
+  behaviorJson          Json      @map("behavior_json")
+  escalationRulesJson    Json      @map("escalation_rules_json")
+  operatingRulesJson     Json      @default("{}") @map("operating_rules_json")
+  createdBy             String?   @map("created_by")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  deployedAt             DateTime? @map("deployed_at")
+
+  aiEmployee AiEmployee @relation("EmployeeVersions", fields: [aiEmployeeId], references: [id], onDelete: Cascade)
+
+  @@unique([aiEmployeeId, versionNumber])
+  @@map("ai_employee_configuration_versions")
+}
+
+// ─────────────────────────────────────────────────────────────────── audit
+
+/// Append-only. Nothing ever updates or deletes a row here.
+model AuditEvent {
+  id           String   @id @default(cuid())
+  workspaceId  String?  @map("workspace_id")
+  actorType    String   @map("actor_type")
+  actorId      String?  @map("actor_id")
+  action       String
+  resourceType String?  @map("resource_type")
+  resourceId   String?  @map("resource_id")
+  metadataJson Json     @default("{}") @map("metadata_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@map("audit_events")
+}

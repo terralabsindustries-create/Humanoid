@@ -1,0 +1,14 @@
+# Monorepo-wide. client/ and backend/ each carry their own .gitignore for
+# package-specific patterns (build output, node_modules, etc.) — this only
+# covers what could appear at the root itself.
+
+.DS_Store
+*.pem
+
+# pnpm hoists nothing here today, but guard against it anyway.
+/node_modules
+
+# Never committed, anywhere in the tree.
+.env
+.env.*
+!.env.example

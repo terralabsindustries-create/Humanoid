@@ -1,0 +1,469 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Humanoid design tokens
+   ---------------------------------------------------------------------------
+   Rules of the system:
+   1. Domain components never hardcode a colour. They reference semantic tokens.
+   2. Colour never carries meaning alone. Every state token pairs with an icon
+      and a text label at the component level (see components/primitives/status).
+   3. The default brand accent is ink, not a hue. Saturated colour is reserved
+      for operational state, so that colour on screen always means something.
+      Workspaces may override --accent with their own brand colour.
+   Themes are driven by [data-theme] on <html>, set pre-paint by the inline
+   script in app/layout.tsx. "system" is resolved to an explicit value in JS
+   rather than duplicated in CSS.
+--------------------------------------------------------------------------- */
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* ============================== LIGHT (default) ========================== */
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  /* Surfaces — warm cream workspace */
+  --surface-app: #f2efe7;
+  --surface-elevated: #f8f5ee;
+  --surface-subtle: #ece8de;
+  --surface-inset: #e7e3d8;
+  --surface-overlay: #fbf9f4;
+  --surface-scrim: rgb(23 23 19 / 0.32);
+
+  /* Text */
+  --text-primary: #171713;
+  --text-secondary: #77746c;
+  --text-tertiary: #96938a;
+  --text-inverted: #f8f5ee;
+
+  /* Lines */
+  --line-subtle: rgb(23 23 19 / 0.1);
+  --line-strong: rgb(23 23 19 / 0.18);
+  --line-focus: #171713;
+
+  /* Accent — ink by default, workspace-overridable */
+  --accent: #171713;
+  --accent-hover: #2c2c26;
+  --accent-fg: #f8f5ee;
+  --accent-surface: rgb(23 23 19 / 0.06);
+
+  /* Control state — the product's most important distinction.
+     AI and human get reserved hues that no other state may use. */
+  --state-ai: #0e6a5e;
+  --state-ai-surface: rgb(14 106 94 / 0.1);
+  --state-human: #5a44a8;
+  --state-human-surface: rgb(90 68 168 / 0.1);
+
+  /* Operational semantics */
+  --state-success: #2f6b3a;
+  --state-success-surface: rgb(47 107 58 / 0.1);
+  --state-warning: #8a5a0b;
+  --state-warning-surface: rgb(138 90 11 / 0.12);
+  --state-danger: #a3301f;
+  --state-danger-surface: rgb(163 48 31 / 0.1);
+  --state-info: #1e5a8a;
+  --state-info-surface: rgb(30 90 138 / 0.1);
+  --state-neutral: #77746c;
+  --state-neutral-surface: rgb(23 23 19 / 0.06);
+
+  /* Elevation — restrained. Prefer tonal shift and line over shadow. */
+  --elevation-raised: 0 1px 2px rgb(23 23 19 / 0.05);
+  --elevation-overlay: 0 4px 16px -4px rgb(23 23 19 / 0.12),
+    0 1px 3px rgb(23 23 19 / 0.06);
+  --elevation-dialog: 0 16px 48px -12px rgb(23 23 19 / 0.22),
+    0 2px 8px rgb(23 23 19 / 0.06);
+}
+
+/* ================================== DARK ================================= */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --surface-app: #161714;
+  --surface-elevated: #20211e;
+  --surface-subtle: #292a26;
+  --surface-inset: #121310;
+  --surface-overlay: #252622;
+  --surface-scrim: rgb(0 0 0 / 0.55);
+
+  --text-primary: #f4f1e9;
+  --text-secondary: #a7a49b;
+  --text-tertiary: #85837b;
+  --text-inverted: #171713;
+
+  --line-subtle: rgb(255 255 255 / 0.09);
+  --line-strong: rgb(255 255 255 / 0.16);
+  --line-focus: #f4f1e9;
+
+  --accent: #f4f1e9;
+  --accent-hover: #ffffff;
+  --accent-fg: #171713;
+  --accent-surface: rgb(255 255 255 / 0.08);
+
+  --state-ai: #4fd1be;
+  --state-ai-surface: rgb(79 209 190 / 0.14);
+  --state-human: #a896f5;
+  --state-human-surface: rgb(168 150 245 / 0.14);
+
+  --state-success: #6fcf87;
+  --state-success-surface: rgb(111 207 135 / 0.14);
+  --state-warning: #e5b45c;
+  --state-warning-surface: rgb(229 180 92 / 0.14);
+  --state-danger: #f08a78;
+  --state-danger-surface: rgb(240 138 120 / 0.14);
+  --state-info: #7fb8e8;
+  --state-info-surface: rgb(127 184 232 / 0.14);
+  --state-neutral: #a7a49b;
+  --state-neutral-surface: rgb(255 255 255 / 0.07);
+
+  --elevation-raised: 0 1px 2px rgb(0 0 0 / 0.3);
+  --elevation-overlay: 0 4px 16px -4px rgb(0 0 0 / 0.5),
+    0 1px 3px rgb(0 0 0 / 0.3);
+  --elevation-dialog: 0 16px 48px -12px rgb(0 0 0 / 0.65),
+    0 2px 8px rgb(0 0 0 / 0.4);
+}
+
+/* ============================= HIGH CONTRAST ============================= */
+/* Raises line weight and text contrast without changing hue relationships,
+   so learned colour meanings survive the switch. */
+
+:root[data-contrast="high"] {
+  --text-secondary: #3d3b35;
+  --text-tertiary: #4f4d46;
+  --line-subtle: rgb(23 23 19 / 0.28);
+  --line-strong: rgb(23 23 19 / 0.55);
+  --state-ai: #0a4f46;
+  --state-human: #43318a;
+  --state-success: #1f5028;
+  --state-warning: #6b4508;
+  --state-danger: #841f11;
+  --state-info: #14446b;
+}
+
+:root[data-theme="dark"][data-contrast="high"] {
+  --text-secondary: #d5d2c9;
+  --text-tertiary: #bcb9b0;
+  --line-subtle: rgb(255 255 255 / 0.26);
+  --line-strong: rgb(255 255 255 / 0.45);
+  --state-ai: #7fe6d6;
+  --state-human: #c4b6ff;
+  --state-success: #96e0a8;
+  --state-warning: #f3cd85;
+  --state-danger: #ffab9c;
+  --state-info: #a6d0f5;
+}
+
+/* =============================== TAILWIND MAP ============================ */
+
+@theme inline {
+  /* Surfaces */
+  --color-app: var(--surface-app);
+  --color-elevated: var(--surface-elevated);
+  --color-subtle: var(--surface-subtle);
+  --color-inset: var(--surface-inset);
+  --color-overlay: var(--surface-overlay);
+  --color-scrim: var(--surface-scrim);
+
+  /* Text */
+  --color-ink: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --color-faint: var(--text-tertiary);
+  --color-inverted: var(--text-inverted);
+
+  /* Lines */
+  --color-line: var(--line-subtle);
+  --color-line-strong: var(--line-strong);
+  --color-focus: var(--line-focus);
+
+  /* Accent */
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-surface: var(--accent-surface);
+
+  /* Operational state */
+  --color-ai: var(--state-ai);
+  --color-ai-surface: var(--state-ai-surface);
+  --color-human: var(--state-human);
+  --color-human-surface: var(--state-human-surface);
+  --color-success: var(--state-success);
+  --color-success-surface: var(--state-success-surface);
+  --color-warning: var(--state-warning);
+  --color-warning-surface: var(--state-warning-surface);
+  --color-danger: var(--state-danger);
+  --color-danger-surface: var(--state-danger-surface);
+  --color-info: var(--state-info);
+  --color-info-surface: var(--state-info-surface);
+  --color-neutral: var(--state-neutral);
+  --color-neutral-surface: var(--state-neutral-surface);
+
+  /* Radius — deliberately not one value everywhere */
+  --radius-control: 9px;
+  --radius-input: 11px;
+  --radius-panel: 14px;
+  --radius-dialog: 20px;
+  --radius-immersive: 28px;
+
+  /* Elevation */
+  --shadow-raised: var(--elevation-raised);
+  --shadow-overlay: var(--elevation-overlay);
+  --shadow-dialog: var(--elevation-dialog);
+
+  /* Type families */
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", monospace;
+  --font-display: var(--font-instrument-serif), ui-serif, Georgia, serif;
+
+  /* Fluid type scale. Operational screens stay compact; display sizes only
+     appear in onboarding, empty states and milestones. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1rem;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.125rem;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.375rem;
+  --text-md: 0.9375rem;
+  --text-md--line-height: 1.5rem;
+  --text-lg: 1.0625rem;
+  --text-lg--line-height: 1.625rem;
+  --text-xl: clamp(1.25rem, 0.4vw + 1.15rem, 1.4375rem);
+  --text-xl--line-height: 1.3;
+  --text-2xl: clamp(1.5rem, 0.9vw + 1.3rem, 1.875rem);
+  --text-2xl--line-height: 1.25;
+  --text-3xl: clamp(1.875rem, 1.8vw + 1.5rem, 2.625rem);
+  --text-3xl--line-height: 1.15;
+  --text-4xl: clamp(2.5rem, 3.5vw + 1.6rem, 4rem);
+  --text-4xl--line-height: 1.05;
+
+  /* Motion — mirrored in lib/tokens/motion.ts for JS-driven animation */
+  --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
+  --duration-feedback: 100ms;
+  --duration-fast: 160ms;
+  --duration-standard: 240ms;
+  --duration-panel: 300ms;
+  --duration-spatial: 420ms;
+}
+
+/* ================================ DENSITY ================================ */
+/* Row height is a token so tables, lists and the live rail stay in rhythm. */
+
+:root {
+  --row-height: 40px;
+  --row-padding-x: 12px;
+  --shell-gutter: 24px;
+}
+
+:root[data-density="compact"] {
+  --row-height: 32px;
+  --row-padding-x: 10px;
+  --shell-gutter: 16px;
+}
+
+/* ================================== BASE ================================= */
+
+* {
+  border-color: var(--line-subtle);
+}
+
+html {
+  background: var(--surface-app);
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: var(--surface-app);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
+  font-synthesis-weight: none;
+  text-rendering: optimizeLegibility;
+}
+
+/* Tabular figures everywhere numbers are compared: metrics, tables, counts,
+   timestamps. Prevents digits jittering as live values update. */
+.tabular,
+table,
+time,
+[data-numeric] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Focus is always visible and never removed — only restyled. */
+:focus-visible {
+  outline: 2px solid var(--line-focus);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+::selection {
+  background: var(--accent-surface);
+}
+
+/* Scrollbars: present but quiet. */
+@supports (scrollbar-width: thin) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+}
+
+/* ============================ MOTION PREFERENCES ========================= */
+/* Two separate axes: the OS reduced-motion setting, and the product's own
+   reduced-sensory mode (which also silences sound — see lib/tokens/sound.ts).
+   Either one collapses motion to opacity only. */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+:root[data-sensory="reduced"] *,
+:root[data-sensory="reduced"] *::before,
+:root[data-sensory="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+/* ================================ PRESS FEEL ============================= */
+/* Every control compresses under a press. This is the product's baseline
+   tactile signal and the reason interface sound can stay off by default: the
+   confirmation that an input was received is already there, silently, on every
+   control, in a quiet room, on a muted phone.
+   1.5% is deliberate. Large enough to perceive at the moment of contact, small
+   enough to survive being triggered thousands of times a day without becoming
+   the thing you notice about the product.
+   Sound and haptics are the same signal in other channels — see
+   lib/interaction/tactile.ts. `data-tactile="off"` opts an element or a whole
+   subtree out of all three.
+   Declared inside @layer base so Tailwind's transition utilities still win on
+   elements that set their own; those simply compress instantly, which is not a
+   worse press, only a less rounded release. */
+
+@layer base {
+  @media (prefers-reduced-motion: no-preference) {
+    :root:not([data-sensory="reduced"])
+      :is(
+        button,
+        summary,
+        a[href],
+        input[type="checkbox"],
+        input[type="radio"],
+        [role="button"],
+        [role="menuitem"],
+        [role="menuitemcheckbox"],
+        [role="menuitemradio"],
+        [role="option"],
+        [role="tab"],
+        [role="radio"],
+        [role="switch"],
+        [role="checkbox"]
+      ):not(
+        [disabled],
+        [aria-disabled="true"],
+        [data-tactile="off"],
+        :where([data-tactile="off"] *)
+      ) {
+      transition: transform var(--duration-feedback) var(--ease-out-quart);
+    }
+
+    :root:not([data-sensory="reduced"])
+      :is(
+        button,
+        summary,
+        a[href],
+        input[type="checkbox"],
+        input[type="radio"],
+        [role="button"],
+        [role="menuitem"],
+        [role="menuitemcheckbox"],
+        [role="menuitemradio"],
+        [role="option"],
+        [role="tab"],
+        [role="radio"],
+        [role="switch"],
+        [role="checkbox"]
+      ):not(
+        [disabled],
+        [aria-disabled="true"],
+        [data-tactile="off"],
+        :where([data-tactile="off"] *)
+      ):active {
+      transform: scale(0.985);
+    }
+  }
+}
+
+/* ============================== LIVE INDICATORS ========================== */
+/* The only ambient motion permitted in the product, and only on genuinely
+   live elements: an active call, a streaming transcript, a syncing source.
+   Never decorative. */
+
+@keyframes humanoid-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@keyframes humanoid-listen {
+  0%,
+  100% {
+    transform: scaleY(0.4);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.live-pulse {
+  animation: humanoid-pulse 2s var(--ease-in-out-quart) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-pulse {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* An incorrect code or a failed submit shakes once. Covered by the same
+   reduced-motion overrides above (they target `*`), so no separate guard is
+   needed here. */
+@keyframes humanoid-shake {
+  10%,
+  90% {
+    transform: translateX(-1px);
+  }
+  20%,
+  80% {
+    transform: translateX(2px);
+  }
+  30%,
+  50%,
+  70% {
+    transform: translateX(-3px);
+  }
+  40%,
+  60% {
+    transform: translateX(3px);
+  }
+}
+
+.shake-once {
+  animation: humanoid-shake 0.4s var(--ease-out-quart);
+}

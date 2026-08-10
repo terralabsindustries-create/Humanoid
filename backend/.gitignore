@@ -1,0 +1,16 @@
+/node_modules
+/dist
+/coverage
+
+# env files (see .env.example for the documented shape)
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+.DS_Store
+*.tsbuildinfo

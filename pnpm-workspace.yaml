@@ -1,0 +1,17 @@
+packages:
+  - "client"
+  - "backend"
+
+# unrs-resolver ships prebuilt native binaries and its postinstall selects the
+# right one for this platform. eslint-config-next's import resolution depends on
+# it, so the build script has to be allowed or linting fails.
+allowBuilds:
+  unrs-resolver: true
+  "@prisma/client": true
+  prisma: true
+  argon2: true
+  '@prisma/engines': true
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - lucide-react@1.29.0
