@@ -96,3 +96,50 @@ reads.
   frontend's `RolePreset` and the capability strings already exercised by the
   Northgate Health fixture on the frontend — a real workspace's owner gets
   `["*"]`, matching what the mock fixture already assumed.
+
+## Twilio inbound speech test (`modules/telephony`)
+
+A deliberately minimal probe: does Twilio's inbound speech recognition reach
+this backend as text? Nothing more. It answers a call, transcribes each
+phrase, prints it to stdout and loops. **No database writes, no AI, no
+outbound calls, no realtime audio** — a call leaves no trace but console
+output, so this is a diagnostic, not the beginning of a conversation store.
+
+Two webhooks, both signature-verified:
+
+| Route | Purpose |
+| --- | --- |
+| `POST /api/v1/twilio/voice/incoming` | Answers, prompts, opens the first `<Gather>` |
+| `POST /api/v1/twilio/voice/speech` | Receives one transcription, prints it, re-opens `<Gather>` |
+
+Turn state (`?turn=N&misses=M`) rides in the `<Gather action>` query string, so
+the pair stays stateless — no session store, and Twilio's own signature covers
+it. The loop stops after 10 turns or 2 consecutive silences.
+
+```bash
+ngrok http 4000     # in another terminal; paste the https URL into PUBLIC_BASE_URL
+pnpm dev
+```
+
+Then point the number's **A call comes in** webhook (Twilio Console → Phone
+Numbers → the number → Voice Configuration) at
+`$PUBLIC_BASE_URL/api/v1/twilio/voice/incoming`, HTTP POST.
+
+Three things cause almost every failure here:
+
+- **`PUBLIC_BASE_URL` not matching the Console URL exactly.** Twilio HMACs the
+  URL it was configured with; a scheme, host or trailing-slash difference
+  yields a 403 with `signature did not validate for this URL` in the log,
+  which prints the URL this side reconstructed — compare the two.
+- **`TWILIO_AUTH_TOKEN` vs an API key secret.** Webhook signatures use the
+  account **Auth Token**. An API key secret will never validate.
+- **ngrok's URL changing on restart** (free tier), silently invalidating both
+  the Console entry and `PUBLIC_BASE_URL`.
+
+With `TWILIO_AUTH_TOKEN` unset the routes accept unsigned requests in
+development and log a loud warning each boot; in production they refuse
+outright. `TWILIO_ACCOUNT_SID`, when set, rejects webhooks from other
+accounts — the one check that still holds while signature validation is off.
+
+Both routes run at `logLevel: "warn"` so Fastify's per-request info logs don't
+bury the transcription blocks; rejected-signature warnings still print.

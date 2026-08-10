@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import cookie from "@fastify/cookie";
+import formbody from "@fastify/formbody";
 import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
 import { env } from "@/config/env.js";
@@ -12,6 +13,7 @@ import { registerWorkspaceRoutes } from "@/modules/workspaces/workspace.routes.j
 import { registerOnboardingRoutes } from "@/modules/onboarding/onboarding.routes.js";
 import { registerAiEmployeeRoutes } from "@/modules/ai-employees/ai-employee.routes.js";
 import { registerUserRoutes } from "@/modules/users/user.routes.js";
+import { registerTwilioVoiceRoutes } from "@/modules/telephony/voice.routes.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -30,6 +32,9 @@ export async function buildApp() {
     credentials: true,
   });
   await app.register(cookie, { secret: env.COOKIE_SECRET });
+  // Twilio posts webhooks as application/x-www-form-urlencoded, which Fastify
+  // has no parser for out of the box.
+  await app.register(formbody);
   await app.register(rateLimit, {
     global: true,
     max: 300,
@@ -49,6 +54,7 @@ export async function buildApp() {
       registerOnboardingRoutes(api);
       registerAiEmployeeRoutes(api);
       registerUserRoutes(api);
+      registerTwilioVoiceRoutes(api);
     },
     { prefix: "/api/v1" },
   );

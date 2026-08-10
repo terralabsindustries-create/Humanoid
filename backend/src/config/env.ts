@@ -4,6 +4,18 @@ import { z } from "zod";
  * Environment contract. Fails fast and loudly on boot rather than letting a
  * missing secret surface later as a confusing runtime error mid-request.
  */
+/**
+ * Treats a blank value the same as an absent one, so a `.env` copied from
+ * `.env.example` with keys left empty boots instead of failing validation.
+ */
+const optionalString = z
+  .string()
+  .optional()
+  .transform((value) => {
+    const trimmed = value?.trim();
+    return trimmed && trimmed.length > 0 ? trimmed : undefined;
+  });
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -16,6 +28,25 @@ const schema = z.object({
   OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
   OTP_MAX_ATTEMPTS: z.coerce.number().int().positive().default(5),
   EXPOSE_OTP_IN_RESPONSE: z.coerce.boolean().default(false),
+
+  // Telephony. All optional — the backend must stay bootable for anyone not
+  // running the Twilio speech test.
+  //
+  // The public https origin Twilio can reach (an ngrok URL in development).
+  // Twilio signs the exact URL it was configured to call, so this must match
+  // the Twilio Console entry byte for byte or signature checks will fail.
+  PUBLIC_BASE_URL: optionalString
+    .refine((value) => value === undefined || /^https?:\/\//.test(value), {
+      message: "PUBLIC_BASE_URL must start with http:// or https://",
+    })
+    .transform((value) => value?.replace(/\/+$/, "")),
+  // Webhook signatures are HMAC'd with the account Auth Token, NOT an API key
+  // secret — API keys authenticate outbound REST calls, which this does not make.
+  TWILIO_AUTH_TOKEN: optionalString,
+  TWILIO_ACCOUNT_SID: optionalString,
+  TWILIO_PHONE_NUMBER: optionalString,
+  // "en-IN" measurably beats "en-US" for Indian-English callers.
+  TWILIO_SPEECH_LANGUAGE: z.string().default("en-US"),
 });
 
 const parsed = schema.safeParse(process.env);

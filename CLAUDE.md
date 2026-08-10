@@ -271,6 +271,14 @@ cache. Conversations, knowledge, workflows, live activity, and every other
 telephony/AI-runtime-backed surface remain intentional, clearly-isolated mock
 data — see rule 13 above.
 
+**Twilio inbound speech probe** (`backend/src/modules/telephony/`): a real,
+signature-verified Twilio webhook pair that answers an inbound call,
+transcribes each phrase and prints it to the backend console. Read it as a
+diagnostic, not as telephony becoming real — it writes nothing to Postgres,
+calls no model, and has no frontend surface, so rule 13 still holds in full:
+conversations remain mock. See `backend/README.md` § Twilio inbound speech
+test for setup and the failure modes.
+
 Auth and onboarding routes are not in `screen-registry.ts`: that registry is
 specifically the shell's *navigable* surface inventory, and these routes
 exist before a shell does.
