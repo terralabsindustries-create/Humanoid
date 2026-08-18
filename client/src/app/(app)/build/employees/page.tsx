@@ -1,7 +1,7 @@
-import { PlannedSurface } from "@/components/screens/planned-surface";
+import { EmployeeRoster } from "@/components/screens/employee-roster";
 
 export const metadata = { title: "AI employees · Humanoid" };
 
 export default function Page() {
-  return <PlannedSurface title="AI employees" />;
+  return <EmployeeRoster />;
 }

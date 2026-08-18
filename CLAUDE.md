@@ -38,8 +38,8 @@ Console description in §3.5 reflects what's actually built. `architecture.md`
 and `database.md` are the equivalent baseline for the backend — `backend/`
 follows their table shapes and API conventions for everything it implements,
 and deliberately does not implement tables/endpoints for features that have
-no real frontend yet (conversations, knowledge, workflows, integrations,
-billing) — see the "Isolate demo data" rule below.
+no real frontend yet (knowledge, workflows, integrations, billing) — see the
+"Isolate demo data" rule below.
 
 ## Commands
 
@@ -117,12 +117,13 @@ lib/
   onboarding/bootstrap.ts  bootstrapSession() — the one backend-authoritative "where do I
                             belong" check, called at every real entry point
   services/contract.ts     the API contract — mock and HTTP both satisfy it
-  services/mock.ts         mock impl for conversations/knowledge/etc. — intentionally still fake,
+  services/mock.ts         mock impl for knowledge/workflows/etc. — intentionally still fake,
                             see "Isolate demo data" below. Delegates workspace identity to
-                            onboarded-workspace.ts when a real onboarded tenant exists.
+                            onboarded-workspace.ts, and conversations to real-conversations.ts,
+                            when a real onboarded tenant exists.
   services/auth/           contract + http.ts (real, default) + mock.ts (offline fallback)
   services/http/           the real backend client — client.ts (cookies + silent refresh-on-401),
-                            workspaces.ts, onboarding.ts, ai-employees.ts
+                            workspaces.ts, onboarding.ts, ai-employees.ts, conversations.ts
   mock/fixtures.ts         Northgate Health — fictional 3-site clinic group (the permanent demo tenant)
   tokens/                  motion + sound tokens
   store/                   preferences, scope, auth (local cache, not the security boundary),
@@ -192,20 +193,21 @@ lib/
     (`lib/domains/onboarded-workspace.ts`) is the one place that decides which
     one a browser sees; it's an async, cached fetch against the real backend
     (`GET /me`) now, not a localStorage read — it overrides
-    `getWorkspace`/`listLocations`/`getCurrentUser` and zeroes the live-data
-    endpoints (a fresh workspace has taken no real calls) rather than mixing a
-    chosen industry with Northgate's dental-clinic conversations.
+    `getWorkspace`/`listLocations`/`getCurrentUser`, routes conversations to
+    the real Twilio-backed data via `lib/domains/real-conversations.ts`, and
+    zeroes whatever's still mock-only (approvals, usage, review issues) rather
+    than mixing a chosen industry with Northgate's dental-clinic data.
 
 13. **Isolate demo data behind explicit adapters — never fabricate a backend
-    for a feature that isn't real.** Auth, workspaces, and onboarding are real
-    (Postgres-backed, `backend/`). Conversations, knowledge, workflows,
-    integrations, live call activity are not — there's no telephony or AI
-    runtime yet — and stay exactly as visible, intentional mock data
-    (`lib/mock/fixtures.ts`, `lib/services/mock.ts`) rather than being given a
-    fake-real backend that would make them indistinguishable from the parts
-    that actually work. When a feature crosses from mock to real, it gets its
-    own backend module and Prisma tables — it does not retroactively make the
-    *other* still-mock features look more real by association.
+    for a feature that isn't real.** Auth, workspaces, onboarding, and
+    conversations are real (Postgres-backed, `backend/`). Knowledge,
+    workflows, integrations, review, records, live activity beyond a call's
+    own transcript are not — and stay exactly as visible, intentional mock
+    data (`lib/mock/fixtures.ts`, `lib/services/mock.ts`) rather than being
+    given a fake-real backend that would make them indistinguishable from the
+    parts that actually work. When a feature crosses from mock to real, it
+    gets its own backend module and Prisma tables — it does not retroactively
+    make the *other* still-mock features look more real by association.
 
 14. **The frontend auth store (`lib/store/auth.ts`) is a local cache, not the
     security boundary.** The real session lives in httpOnly cookies the
@@ -267,29 +269,108 @@ record created from the onboarding answers on completion. Verified
 end-to-end including a cross-device resume test: a second, cookie-less
 browser context logging in with only email + password lands directly on the
 correct, fully-configured dashboard, proving nothing depends on client-side
-cache. Conversations, knowledge, workflows, live activity, and every other
-telephony/AI-runtime-backed surface remain intentional, clearly-isolated mock
-data — see rule 13 above.
+cache. Knowledge, workflows, live activity beyond a call's own transcript, and
+every other telephony/AI-runtime-backed surface remain intentional,
+clearly-isolated mock data — see rule 13 above.
 
-**Twilio inbound speech probe** (`backend/src/modules/telephony/`): a real,
-signature-verified Twilio webhook pair that answers an inbound call,
-transcribes each phrase and prints it to the backend console. Read it as a
-diagnostic, not as telephony becoming real — it writes nothing to Postgres,
-calls no model, and has no frontend surface, so rule 13 still holds in full:
-conversations remain mock. See `backend/README.md` § Twilio inbound speech
-test for setup and the failure modes.
+**Twilio voice line** (`backend/src/modules/telephony/`): a real,
+signature-verified webhook pair that answers an inbound call and transcribes
+each phrase. With `ANTHROPIC_API_KEY` set it also *replies* — Claude prompted
+with the `AiEmployeeConfigurationVersion` onboarding wrote, spoken back down
+the phone. This is the first thing that consumes onboarding's output rather
+than just producing it.
+
+The boundary rule 13 draws is worth stating precisely: the call itself is
+real, and now so is its record — every turn is persisted to Postgres through
+`backend/src/modules/conversations` (`Conversation`, `CallSession`,
+`ConversationMessage`) as it happens, not reconstructed afterwards. The
+in-memory Map keyed by CallSid still exists, but only as the model's working
+context for the live call; Postgres holds the durable transcript. What's
+still missing is everything downstream of the transcript — no calendar,
+knowledge base, or customer records behind it, so the employee can promise a
+follow-up, not take an action; no live control handoff, grounding citations,
+or procedure run, because none of that machinery exists for a real call yet.
+See `backend/README.md` § Twilio inbound speech test and § AI receptionist.
 
 Auth and onboarding routes are not in `screen-registry.ts`: that registry is
 specifically the shell's *navigable* surface inventory, and these routes
 exist before a shell does.
 
-Everything under `(app)` other than Today and Preferences is still a
-`PlannedSurface` placeholder. Next up is the first vertical journey per arch
-§13 Phase 5: AI employee configuration → knowledge → procedure → voice →
-simulation → readiness → publish → test call → conversation timeline →
-appointment created — i.e., making the rest of the shell as real as the
-onboarding path that now feeds it, and giving each new real feature its own
-backend module the same way onboarding got one.
+`screen-registry.ts` is the live inventory of which surfaces under `(app)` are
+`built` and which still render a `PlannedSurface` placeholder — read it rather
+than trusting a prose list here to stay current.
+
+**The customer directory** (`/customers`, `components/screens/party-directory.tsx`)
+is built: a master-detail directory titled from the lexicon (Patients, Guests,
+Clients), whose job is the one in the registry — confirming or correcting what
+the AI believes about a person. Facts are grouped and tinted by provenance
+rather than by field, consent is stated as the behaviour it causes ("playback
+is blocked for everyone") rather than as a flag, and a call/record history is
+interleaved from `listConversations({ partyId })` and `listRecords({ partyId })`.
+It is mock-backed per rule 13, with one deliberate exception: `mock.ts` keeps a
+session-lived copy of the parties so `confirmPartyFact` / `correctPartyFact`
+actually change the record. A screen whose primary action does nothing would be
+a fake button, not a mock — but nothing persists past a reload, and no backend
+module is implied.
+
+**Conversations** (`/conversations`, `/conversations/[id]`,
+`components/screens/conversations-list.tsx` +
+`conversation-detail.tsx`) is built and, for a real onboarded tenant, reads
+real data: `lib/domains/real-conversations.ts` calls the backend's
+conversations module and maps its transcript-and-outcome shape onto the same
+`Conversation` type the rest of the frontend renders, filling in whatever the
+Twilio pipeline can't yet produce (live control, actions, procedure run,
+interventions, sentiment) with honest empty values rather than invented ones.
+Northgate keeps rendering its full fixture data unchanged, including the
+richer sections a real call can't populate yet — the two never mix, per rule
+12. This is the first screen where "mock vs. real" is decided per request
+rather than per workspace.
+
+**The AI employee roster and the Authority Matrix** (`/build/employees`,
+`/build/employees/[id]`, `components/screens/employee-roster.tsx` +
+`employee-detail.tsx`) is built, and is the second surface to decide mock vs.
+real per request: `lib/domains/real-employees.ts` maps the `AiEmployee` and
+`AiEmployeeConfigurationVersion` rows onboarding writes onto the same
+`AIEmployee` type Northgate's fixtures use. What the real record cannot yet
+carry — an authority matrix, grants, a voice, a deployment — comes back empty
+and the screen says so, rather than borrowing Maya's. The two configured facts
+onboarding *does* capture (communication style, escalation triggers) are stored
+as option ids and resolved back into the words the business saw through the
+pack that asked the question, so the industry knowledge stays in
+`lib/domains/` per rule 10.
+
+Three things about it are worth knowing before changing it:
+
+- **`lib/domain/employees.ts` owns the capability catalogue.** `CapabilityId`
+  tokens contain domain nouns (`book_visit` is "Book an appointment" in a
+  clinic and "Book a reservation" in a hotel), so capability copy is a function
+  of the lexicon and lives there rather than in `labels.ts` — which is
+  explicitly for enums that read the same in every industry. Use
+  `withArticle()` and `lower()` from `lib/lexicon` for anything interpolating a
+  term; a hand-rolled `toLowerCase()` turns "AI employee" into "ai employee".
+- **The matrix is banded by consequence, not listed by capability.** Bands
+  answer "what happens without me" — does it alone / asks first / drafts /
+  never / not part of its job / cannot be switched on — and `authorityBands()`
+  derives them so the roster's one-line summary and the detail matrix cannot
+  disagree.
+- **Every catalogue capability gets a row, granted or not.** §3.11 requires
+  hard blocks to be rendered with their reason rather than hidden, and a review
+  listing only what was switched on cannot answer "can it take card details?".
+  A grant's own `hardBlockReason` is employee-specific and wins on the detail
+  page; the roster rail uses the catalogue's roster-wide reason instead.
+
+Nothing on either screen writes. Authority changes land in a draft and go live
+through Releases, which both screens link to and say so.
+
+Next up is the rest of the first vertical journey per arch §13 Phase 5: AI
+employee configuration → knowledge → procedure → voice → simulation →
+readiness → publish → test call → conversation timeline → appointment created.
+Its two ends now exist for real — onboarding writes the employee, the Twilio
+line answers with it, `/build/employees` reviews what it may do, and
+`/conversations/[id]` shows what it said. What is missing is the middle: real
+knowledge, procedures, a voice studio and a readiness gate behind their own
+backend modules, and — the thing every empty band on the employee detail is
+pointing at — an authority matrix a real tenant can actually be given.
 
 ## Next.js agent rules
 

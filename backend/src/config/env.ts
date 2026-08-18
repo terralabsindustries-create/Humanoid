@@ -47,6 +47,25 @@ const schema = z.object({
   TWILIO_PHONE_NUMBER: optionalString,
   // "en-IN" measurably beats "en-US" for Indian-English callers.
   TWILIO_SPEECH_LANGUAGE: z.string().default("en-US"),
+
+  // The AI employee that answers calls. Optional — without a key the phone
+  // line degrades to the transcription-only probe rather than failing.
+  //
+  // "openai" here means the OpenAI *wire format*, not OpenAI the company: it
+  // covers Groq, Gemini's compatibility endpoint, Ollama, OpenRouter, Together
+  // and Cerebras, which differ only by base URL, key and model name.
+  LLM_PROVIDER: z.enum(["anthropic", "openai"]).default("anthropic"),
+
+  ANTHROPIC_API_KEY: optionalString,
+  ANTHROPIC_MODEL: z.string().default("claude-opus-5"),
+
+  LLM_BASE_URL: z.string().default("https://api.groq.com/openai/v1"),
+  LLM_API_KEY: optionalString,
+  LLM_MODEL: z.string().default("llama-3.3-70b-versatile"),
+  // Stopgap until a phone-number → workspace table exists: pins which
+  // onboarded workspace's AI employee answers the test number. Unset means
+  // "the most recently configured one".
+  AI_EMPLOYEE_WORKSPACE_ID: optionalString,
 });
 
 const parsed = schema.safeParse(process.env);

@@ -1,7 +1,7 @@
-import { PlannedSurface } from "@/components/screens/planned-surface";
+import { ProcedureLibrary } from "@/components/screens/procedure-library";
 
 export const metadata = { title: "Procedures · Humanoid" };
 
 export default function Page() {
-  return <PlannedSurface title="Procedures" />;
+  return <ProcedureLibrary />;
 }

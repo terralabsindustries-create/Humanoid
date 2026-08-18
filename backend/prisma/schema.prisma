@@ -53,6 +53,7 @@ model Workspace {
   aiEmployees          AiEmployee[]
   auditEvents          AuditEvent[]
   roles                Role[]
+  conversations        Conversation[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -217,9 +218,88 @@ model AiEmployee {
 
   workspace              Workspace                        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   configurationVersions   AiEmployeeConfigurationVersion[] @relation("EmployeeVersions")
+  conversations           Conversation[]
 
   @@index([workspaceId])
   @@map("ai_employees")
+}
+
+// ──────────────────────────────────────────────────────── conversations
+//
+// Shapes follow database.md § Conversations. Only the three tables the voice
+// pipeline actually populates exist here — conversation_participants,
+// _summaries and _media wait until something real produces them, the same rule
+// the rest of this schema follows.
+
+/// One customer interaction, on any channel. Voice is the only one today.
+model Conversation {
+  id            String    @id @default(cuid())
+  workspaceId   String    @map("workspace_id")
+  aiEmployeeId  String?   @map("ai_employee_id")
+  channelType   String    @default("voice") @map("channel_type")
+  direction     String    @default("inbound")
+  /// active | completed | failed
+  status        String    @default("active")
+  startedAt     DateTime  @default(now()) @map("started_at")
+  endedAt       DateTime? @map("ended_at")
+  language      String    @default("en-GB")
+  /// Why the call ended: completed | no_speech | turn_limit | caller_hung_up
+  outcomeCode   String?   @map("outcome_code")
+  summary       String?
+  metadataJson  Json      @default("{}") @map("metadata_json")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  aiEmployee  AiEmployee?           @relation(fields: [aiEmployeeId], references: [id], onDelete: SetNull)
+  callSession CallSession?
+  messages    ConversationMessage[]
+
+  @@index([workspaceId, startedAt])
+  @@index([workspaceId, status])
+  @@map("conversations")
+}
+
+/// Channel-specific extension of a conversation. One row per phone call.
+model CallSession {
+  id                 String    @id @default(cuid())
+  conversationId     String    @unique @map("conversation_id")
+  provider           String    @default("twilio")
+  /// Twilio's CallSid. Unique so a retried webhook can't duplicate a call.
+  providerCallId     String    @unique @map("provider_call_id")
+  fromNumber         String    @map("from_number")
+  toNumber           String    @map("to_number")
+  status             String    @default("in_progress")
+  connectedAt        DateTime? @map("connected_at")
+  endedAt            DateTime? @map("ended_at")
+  latencyMetricsJson Json      @default("{}") @map("latency_metrics_json")
+  createdAt          DateTime  @default(now()) @map("created_at")
+  updatedAt          DateTime  @updatedAt @map("updated_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("call_sessions")
+}
+
+/// One turn of the transcript.
+model ConversationMessage {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  sequenceNumber Int      @map("sequence_number")
+  /// customer | ai
+  speakerType    String   @map("speaker_type")
+  contentType    String   @default("text") @map("content_type")
+  textContent    String?  @map("text_content")
+  /// Twilio's speech-recognition confidence. Null on anything the AI said.
+  confidence     Float?
+  metadataJson   Json     @default("{}") @map("metadata_json")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, sequenceNumber])
+  @@index([conversationId])
+  @@map("conversation_messages")
 }
 
 model AiEmployeeConfigurationVersion {

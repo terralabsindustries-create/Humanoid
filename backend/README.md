@@ -143,3 +143,48 @@ accounts — the one check that still holds while signature validation is off.
 
 Both routes run at `logLevel: "warn"` so Fastify's per-request info logs don't
 bury the transcription blocks; rejected-signature warnings still print.
+
+## AI receptionist (`modules/telephony/ai-receptionist.ts`)
+
+Set `ANTHROPIC_API_KEY` and the same phone line stops echoing and starts
+answering: each transcribed phrase goes to Claude prompted with the
+`AiEmployeeConfigurationVersion` that onboarding wrote, and the reply is
+spoken back. This is the first thing that actually *uses* what onboarding
+produces.
+
+Without the key nothing breaks — the line degrades to the transcription probe
+above, and logs which mode it answered in.
+
+**Conversation state is an in-memory `Map` keyed by CallSid**, not a table. Call
+transcripts are a real feature with their own schema and a frontend surface;
+a Map that dies with the process is honestly temporary, where a half-built
+`calls` table would look like the real thing. Rule 13 in the root `CLAUDE.md`
+is the reasoning.
+
+**Which employee answers** is resolved by `AI_EMPLOYEE_WORKSPACE_ID`, or the
+most recently configured one when that's blank. Correct with a single tenant,
+wrong with two — it's a stopgap until a phone-number → workspace mapping
+exists, and the choice is printed on every call so a wrong answer is visible
+rather than silent.
+
+Model settings worth knowing before changing them:
+
+- **Thinking stays on at `effort: "low"`.** Disabling thinking on Claude Opus 5
+  can leak `<thinking>` tags into the response — which a phone line would read
+  aloud to the caller. Low effort keeps latency down without that risk.
+- **`fallbacks: "default"`** re-runs a turn server-side if a safety classifier
+  declines it, so a refusal becomes an answer rather than dead air.
+- **The system prompt fights verbosity deliberately.** Claude Opus 5 writes
+  longer answers by default, and length that reads fine on screen is painful
+  to sit through on a call.
+
+**Latency is the honest weak point.** A turn costs Twilio's end-of-speech
+detection (~1–2s) plus a model round-trip, so expect a few seconds of silence
+between speaking and hearing a reply. `ANTHROPIC_MODEL` is the knob —
+`claude-sonnet-5` or `claude-haiku-4-5` are faster and less capable. Making it
+feel conversational needs streaming audio (Twilio Media Streams), which is a
+different architecture, not a tuning change.
+
+Still not real: no calendar, no knowledge base, no customer records, no
+booking. The prompt tells the employee to say so rather than inventing
+availability — but it can only promise a follow-up, not take an action.

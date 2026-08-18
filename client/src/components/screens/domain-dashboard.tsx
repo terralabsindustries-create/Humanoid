@@ -8,6 +8,8 @@ import { useOnboarding } from "@/lib/store/onboarding";
 import { getDomainPack } from "@/lib/domains/registry";
 import { buildActivityFeed, formatMetricValue } from "@/lib/domains/dashboard-mock";
 import { STANDARD_AI_QUESTION_IDS } from "@/lib/domains/shared";
+import { useLexicon } from "@/components/providers/app-providers";
+import { lower } from "@/lib/lexicon";
 import { Status, StatusPill } from "@/components/primitives/status";
 import { EmptyState } from "@/components/primitives/empty-state";
 
@@ -26,6 +28,7 @@ export function DomainDashboard() {
   const hydrated = useOnboarding((s) => s.hydrated);
   const hydrate = useOnboarding((s) => s.hydrate);
   const snapshot = useOnboarding();
+  const lexicon = useLexicon();
 
   // `TodayRouter` decides *whether* to render this component from a direct
   // localStorage read (`useSyncExternalStore`, safe on a hard reload with no
@@ -56,8 +59,10 @@ export function DomainDashboard() {
               {pack.aiEmployeeRoleName} live
             </p>
             <h1 className="mt-1.5 font-display text-3xl text-ink">
+              {/* The word for the people served is the lexicon's job — a
+                  branch on pack id here is exactly the leak rule 10 forbids. */}
               {aiName} is ready to help {businessName}&apos;s{" "}
-              {pack.id === "hospitality" || pack.id === "restaurant" ? "guests" : "customers"}.
+              {lower(lexicon.party.many)}.
             </h1>
           </header>
 

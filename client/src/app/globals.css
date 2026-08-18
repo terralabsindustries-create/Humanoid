@@ -441,6 +441,25 @@ time,
   }
 }
 
+/* ============================ SIMULATION CHROME ========================== */
+/* §8: a user must never mistake a simulation for a live customer, or vice
+   versa. That is worth more than a badge, so the Simulator surface carries a
+   tonal shift, a persistent label, and this hatched edge for as long as it is
+   on screen.
+   The hatch is drawn from a line token rather than a hue of its own.
+   Simulation is not an operational state and must not borrow the meaning of
+   one — least of all the reserved ai/human hues — and a stripe survives
+   greyscale, colour blindness and a glance across a room in a way a tint
+   does not. */
+
+.simulation-hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--line-strong) 0 1px,
+    transparent 1px 6px
+  );
+}
+
 /* An incorrect code or a failed submit shakes once. Covered by the same
    reduced-motion overrides above (they target `*`), so no separate guard is
    needed here. */

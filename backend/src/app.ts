@@ -12,6 +12,7 @@ import { registerAuthRoutes } from "@/modules/auth/auth.routes.js";
 import { registerWorkspaceRoutes } from "@/modules/workspaces/workspace.routes.js";
 import { registerOnboardingRoutes } from "@/modules/onboarding/onboarding.routes.js";
 import { registerAiEmployeeRoutes } from "@/modules/ai-employees/ai-employee.routes.js";
+import { registerConversationRoutes } from "@/modules/conversations/conversation.routes.js";
 import { registerUserRoutes } from "@/modules/users/user.routes.js";
 import { registerTwilioVoiceRoutes } from "@/modules/telephony/voice.routes.js";
 
@@ -53,6 +54,7 @@ export async function buildApp() {
       registerWorkspaceRoutes(api);
       registerOnboardingRoutes(api);
       registerAiEmployeeRoutes(api);
+      registerConversationRoutes(api);
       registerUserRoutes(api);
       registerTwilioVoiceRoutes(api);
     },

@@ -1,7 +1,7 @@
-import { PlannedSurface } from "@/components/screens/planned-surface";
+import { UsageBilling } from "@/components/screens/usage-billing";
 
 export const metadata = { title: "Usage & billing · Humanoid" };
 
 export default function Page() {
-  return <PlannedSurface title="Usage & billing" />;
+  return <UsageBilling />;
 }

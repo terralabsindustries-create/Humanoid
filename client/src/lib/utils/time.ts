@@ -27,6 +27,19 @@ export function relative(iso: string): string {
   return `${Math.round(days / 30)}mo`;
 }
 
+/**
+ * "4d ago" — `relative` with the word attached, for prose.
+ *
+ * Its own function because the compact form has one value that already reads as
+ * a complete phrase: appending "ago" to `relative()` produces "just now ago" the
+ * moment something happens, which is exactly when someone is looking at it. A
+ * real onboarded workspace hits that case on its first page load.
+ */
+export function relativeAgo(iso: string): string {
+  const value = relative(iso);
+  return value === "just now" ? value : `${value} ago`;
+}
+
 /** "4 minutes ago" — for tooltips and screen readers, where compact is wrong. */
 export function relativeLong(iso: string): string {
   const diffMs = now() - new Date(iso).getTime();
@@ -38,7 +51,14 @@ export function relativeLong(iso: string): string {
   if (hours === 1) return "1 hour ago";
   if (hours < 24) return `${hours} hours ago`;
   const days = Math.round(hours / 24);
-  return days === 1 ? "yesterday" : `${days} days ago`;
+  if (days === 1) return "yesterday";
+  if (days < 31) return `${days} days ago`;
+  // Beyond a month, days stop meaning anything — "304 days ago" is a number
+  // to be decoded, "10 months ago" is a fact.
+  const months = Math.round(days / 30);
+  if (months < 18) return months === 1 ? "1 month ago" : `${months} months ago`;
+  const years = Math.round(days / 365);
+  return years === 1 ? "1 year ago" : `${years} years ago`;
 }
 
 /** Call durations: "1:36". Always mm:ss, so widths stay stable in a list. */
@@ -61,6 +81,16 @@ export function clockTime(iso: string, timezone = "Europe/London"): string {
   }).format(new Date(iso));
 }
 
+/** "14 March 2025" — for the dates a record carries rather than events in it. */
+export function longDate(iso: string, timezone = "Europe/London"): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: timezone,
+  }).format(new Date(iso));
+}
+
 export function dayAndTime(iso: string, timezone = "Europe/London"): string {
   return new Intl.DateTimeFormat("en-GB", {
     weekday: "short",
@@ -68,6 +98,36 @@ export function dayAndTime(iso: string, timezone = "Europe/London"): string {
     month: "short",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: timezone,
+  }).format(new Date(iso));
+}
+
+/**
+ * The calendar day an instant falls on, in the workspace's timezone, as
+ * "2026-08-07".
+ *
+ * Grouping a diary by day has to happen in the timezone the site actually
+ * operates in, not the browser's: an 08:30 slot in London is the previous
+ * evening in Los Angeles, and a list that silently regrouped itself because
+ * someone opened it on holiday would be worse than useless. Sortable as a
+ * string, which is why it is ISO order rather than a formatted date.
+ */
+export function dayKey(iso: string, timezone = "Europe/London"): string {
+  // en-CA gives ISO-ordered parts, so no manual part assembly is needed.
+  return new Intl.DateTimeFormat("en-CA", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    timeZone: timezone,
+  }).format(new Date(iso));
+}
+
+/** "Fri 7 August" — the heading over a day's worth of rows. */
+export function dayHeading(iso: string, timezone = "Europe/London"): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "long",
     timeZone: timezone,
   }).format(new Date(iso));
 }

@@ -1,7 +1,7 @@
-import { PlannedSurface } from "@/components/screens/planned-surface";
+import { Performance } from "@/components/screens/performance";
 
 export const metadata = { title: "Performance · Humanoid" };
 
 export default function Page() {
-  return <PlannedSurface title="Performance" />;
+  return <Performance />;
 }

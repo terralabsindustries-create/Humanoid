@@ -60,17 +60,34 @@ export type EmployeeStatus =
   | "scheduled"
   | "degraded";
 
+/**
+ * Everything below `role` is nullable on purpose. A persona is assembled over
+ * time — onboarding sets a name, a role and a manner; the voice studio sets a
+ * voice and the three scales; a scripted greeting is written later still. An
+ * unset scale is not a 50 and an unwritten greeting is not an empty string, so
+ * the absence is modelled rather than defaulted. Screens say "not set yet"
+ * where these are null, which is a fact a person can act on.
+ */
 export type Persona = {
   name: string;
   role: string;
-  /** How the AI introduces itself, including its AI disclosure. */
-  greeting: string;
-  voiceId: string;
+  /**
+   * How the AI introduces itself, including its AI disclosure. Null when the
+   * version carries no script and the channel composes a greeting when it
+   * answers.
+   */
+  greeting: string | null;
+  /**
+   * How it should come across, in words — "Warm and reassuring". The coarse
+   * form of the three scales below, and the only one onboarding collects.
+   */
+  style: string | null;
+  voiceId: string | null;
   languages: string[];
   /** 0–100 scales surfaced in the voice studio as labelled sliders. */
-  warmth: number;
-  formality: number;
-  pace: number;
+  warmth: number | null;
+  formality: number | null;
+  pace: number | null;
 };
 
 export type Deployment = {
@@ -102,6 +119,16 @@ export type EmployeeVersion = {
   persona: Persona;
   grants: Grants;
   authority: CapabilityGrant[];
+  /**
+   * Situations that must reach a person whatever the authority matrix says, in
+   * the words the business chose for them.
+   *
+   * A floor under autonomy rather than a level on it, which is why it belongs
+   * to the version and not to a capability grant: "any mention of chest pain"
+   * cuts across every capability at once, and expressing it as an autonomy
+   * level on each one would need it restating twelve times and kept in step.
+   */
+  escalationTriggers: string[];
   publishedAt: string | null;
   publishedBy: string | null;
   /** Required at publish. Appears in the release history and audit trail. */
@@ -328,16 +355,26 @@ export type PartyFact = {
   updatedAt: string;
 };
 
+/** "unknown" is never assumed to mean yes. Nobody asked, and that is a state. */
+export type ConsentState = "granted" | "declined" | "unknown";
+
 export type Party = {
   id: string;
   displayName: string;
   phone: string | null;
   email: string | null;
   preferredLanguage: string;
+  /**
+   * Where this person belongs in a multi-site group, so the global scope
+   * selector can filter a directory the same way it filters everything else.
+   * The registered site usually also appears as a fact — the field is the
+   * index, the fact is the provenance the operator actually reads.
+   */
+  homeLocationId: string | null;
   facts: PartyFact[];
   consent: {
-    recording: "granted" | "declined" | "unknown";
-    marketing: "granted" | "declined" | "unknown";
+    recording: ConsentState;
+    marketing: ConsentState;
     updatedAt: string | null;
   };
   createdAt: string;
@@ -396,13 +433,15 @@ export type IssueCause =
 
 export type IssueSeverity = "critical" | "high" | "medium" | "low";
 
+export type IssueStatus = "open" | "in_progress" | "resolved" | "dismissed";
+
 export type ReviewIssue = {
   id: string;
   cause: IssueCause;
   title: string;
   detail: string;
   severity: IssueSeverity;
-  status: "open" | "in_progress" | "resolved" | "dismissed";
+  status: IssueStatus;
   /** Blast radius drives ranking: fix the thing affecting the most calls. */
   affectedConversationCount: number;
   evidenceConversationIds: string[];
@@ -417,14 +456,16 @@ export type ReviewIssue = {
  * Proposals are never applied automatically. They land in a draft, which must
  * simulate green before it can be published. (§3.10, J6)
  */
+export type ProposedFixKind =
+  | "add_knowledge"
+  | "edit_knowledge"
+  | "resolve_conflict"
+  | "edit_procedure"
+  | "adjust_autonomy"
+  | "reconnect_tool";
+
 export type ProposedFix = {
-  kind:
-    | "add_knowledge"
-    | "edit_knowledge"
-    | "resolve_conflict"
-    | "edit_procedure"
-    | "adjust_autonomy"
-    | "reconnect_tool";
+  kind: ProposedFixKind;
   summary: string;
   /** Human-readable before/after for the diff view. */
   before: string | null;
@@ -475,11 +516,17 @@ export type KnowledgeSource = {
   collectionId: string;
 };
 
+export type IntegrationStatus =
+  | "connected"
+  | "degraded"
+  | "disconnected"
+  | "error";
+
 export type Integration = {
   id: string;
   name: string;
   vendor: string;
-  status: "connected" | "degraded" | "disconnected" | "error";
+  status: IntegrationStatus;
   lastCheckedAt: string;
   /** Actions this integration exposes as tools. */
   toolIds: string[];
@@ -487,16 +534,138 @@ export type Integration = {
   error: string | null;
 };
 
+/**
+ * One action a connected system exposes to the AI — §5's "Tool (an integration
+ * action, e.g. create appointment) · Integration (the connection)".
+ *
+ * Keeping the two apart is what stops this being a status page. Health is a
+ * property of the connection; consequence is a property of the action. "Dentally
+ * is degraded" is not something anyone can act on. "The AI cannot offer
+ * appointment times, and every booking call depends on it" is.
+ */
+export type ToolStatus = "available" | "degraded" | "unavailable";
+
+/** Whether calling an action changes anything on the other side. */
+export type ToolEffect = "reads" | "writes";
+
+export type Tool = {
+  id: string;
+  integrationId: string;
+  name: string;
+  /** What it does, in an operator's words rather than the vendor's. */
+  description: string;
+  /**
+   * The capabilities this action serves. Authority is granted per capability
+   * (§3.11), so this is the join between "the AI can reach this system" and
+   * "the AI is allowed to use it on its own" — and it is a list because a slot
+   * lookup serves booking, moving and cancelling alike. Empty for an action
+   * that supports no capability on its own.
+   */
+  capabilityIds: CapabilityId[];
+  effect: ToolEffect;
+  /** Which of the connection's scopes this action actually needs. */
+  requiredScopes: string[];
+  status: ToolStatus;
+  /** Attempts and failures in the last 24 hours — blast radius, measured. */
+  requestsLast24h: number;
+  failuresLast24h: number;
+  lastUsedAt: string | null;
+  /** Present when the action is not fully available. Shown verbatim. */
+  error: string | null;
+};
+
+/**
+ * What a step does. Six kinds, because a procedure that can only "do things"
+ * cannot be read: the difference between the AI *asking* for a date of birth,
+ * *checking* one against a records system, and *deciding* what to do when they
+ * disagree is the whole content of the procedure, and flattening it into
+ * generic nodes is what turns a business process into a diagram nobody reads.
+ */
+export type ProcedureStepKind =
+  | "ask"
+  | "look_up"
+  | "decide"
+  | "act"
+  | "say"
+  | "hand_off";
+
+/**
+ * A branch out of a `decide` step, written as a condition and a consequence
+ * rather than as an edge between nodes. `goToStepId` is null where the branch
+ * ends the procedure — which is a real outcome and not a dead end.
+ */
+export type ProcedureBranch = {
+  /** The condition, in the words a manager would write it. */
+  when: string;
+  /** What happens. Prose, because it is read far more often than it is edited. */
+  then: string;
+  goToStepId: string | null;
+};
+
+/**
+ * An unpublished rewrite of a step's prose.
+ *
+ * Held *beside* the live wording rather than replacing it, which is the whole
+ * point: until someone publishes, the AI is still saying the old thing, and a
+ * screen that showed only the new text would tell an editor their fix had
+ * landed when no caller has heard it. Changes accumulate in a draft and reach
+ * a phone line through Releases (§3.10) — never by being typed.
+ */
+export type ProcedureStepDraft = {
+  instruction: string;
+  fallback: string;
+  editedAt: string;
+  editedByUserId: string;
+};
+
+export type ProcedureStep = {
+  id: string;
+  kind: ProcedureStepKind;
+  /** The instruction itself. This is the procedure; everything else is context. */
+  instruction: string;
+  /**
+   * The connected-system action this step needs, if any. The join that lets a
+   * procedure say "this step cannot run today" rather than making someone
+   * cross-reference it against Tools by hand.
+   */
+  toolId: string | null;
+  /** The authority this step exercises, if any. Joins to the employee's grants. */
+  capabilityId: CapabilityId | null;
+  /**
+   * What happens when this step cannot be completed. Required, never blank: an
+   * unstated fallback is not "nothing happens", it is whatever the model
+   * improvises, and that is exactly the thing a procedure exists to prevent.
+   */
+  fallback: string;
+  branches: ProcedureBranch[];
+  /**
+   * True when nothing flows into this step in sequence — it is only reached
+   * because a branch above sent a run here.
+   *
+   * Stored rather than inferred from `branches`, because being a branch target
+   * does not decide it: a branch that skips forward to the next step lands on
+   * the main path, and a branch that diverts an urgent caller to a hand-off
+   * does not. Getting that wrong makes a side path used by 14 runs in 612 read
+   * as the point where the procedure collapses.
+   */
+  offMainPath: boolean;
+  /** The unpublished rewrite, where somebody has written one. */
+  draft: ProcedureStepDraft | null;
+  /** Runs that reached this step, and runs that got no further than it. */
+  reachedCount: number;
+  stoppedCount: number;
+};
+
 export type Procedure = {
   id: string;
   name: string;
   description: string;
   trigger: string;
-  stepCount: number;
   status: "active" | "draft";
   /** Rolling completion rate, used by Review to spot degradation. */
   completionRate: number;
   runCount: number;
+  steps: ProcedureStep[];
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -584,6 +753,13 @@ export type KnowledgeGap = {
   /** What the AI did instead — always declining, never guessing. */
   fallbackBehaviour: string;
   linkedIssueId: string | null;
+  /**
+   * The draft answer written to close this gap, if anyone has written one. A
+   * gap keeps its place in the list until that draft is published: until then
+   * the AI is still declining the question, and dropping the gap on the strength
+   * of an unpublished draft would claim otherwise.
+   */
+  draftItemId: string | null;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -609,9 +785,11 @@ export type ScenarioSuite = {
   scenarioIds: string[];
 };
 
+export type ScenarioResultStatus = "passed" | "failed" | "warning" | "skipped";
+
 export type ScenarioResult = {
   scenarioId: string;
-  status: "passed" | "failed" | "warning" | "skipped";
+  status: ScenarioResultStatus;
   /** Named, actionable — never a score. */
   finding: string | null;
   durationSeconds: number;
@@ -642,11 +820,13 @@ export type ReleaseChange = {
   raisesAuthority: boolean;
 };
 
+export type ReleaseState = "published" | "rolled_back" | "draft";
+
 export type Release = {
   id: string;
   employeeId: string;
   version: number;
-  state: "published" | "rolled_back" | "draft";
+  state: ReleaseState;
   publishedAt: string | null;
   publishedByUserId: string | null;
   note: string;
@@ -676,15 +856,23 @@ export type PhoneNumber = {
  * A compliance requirement that blocks deployment rather than living in
  * settings. In regulated verticals these are gates, not preferences.
  */
+export type ComplianceGateStatus = "met" | "action_needed" | "not_applicable";
+
 export type ComplianceGate = {
   id: string;
   name: string;
   detail: string;
-  status: "met" | "action_needed" | "not_applicable";
+  status: ComplianceGateStatus;
   /** What has to happen to clear it. */
   requirement: string;
   ownerUserId: string | null;
   lastReviewedAt: string | null;
+  /**
+   * The retention policy this gate is about, where it is about one. A gate
+   * arguing that recordings are kept too long should quote the live number
+   * rather than a figure written into its prose months ago and left there.
+   */
+  retentionPolicyId: string | null;
 };
 
 export type RetentionPolicy = {
@@ -705,21 +893,49 @@ export type OnCallEntry = {
   isPrimary: boolean;
 };
 
+/**
+ * One day of outcomes and effort.
+ *
+ * The four outcome counts are exhaustive and `calls` is their sum — a total
+ * that disagrees with its own parts is the fastest way to make a metrics
+ * screen untrustworthy, so the invariant belongs in the type's contract rather
+ * than in whichever screen happens to add them up.
+ *
+ * Effort arrives as totals rather than rates (§3.8). Rates cannot be summed
+ * across days, and every range on this surface is a sum of days.
+ */
 export type PerformancePoint = {
   /** ISO date. */
   at: string;
+  /** Equals resolved + escalated + abandoned + failed. */
   calls: number;
   resolved: number;
   escalated: number;
+  /** Caller hung up before anything was settled. */
+  abandoned: number;
   failed: number;
-  /** Seconds. */
+  /** Seconds, median across the day. Medians resist one 20-minute outlier. */
   medianHandleTime: number;
+  /** Times the AI had to ask again to understand the request. */
+  clarificationTurns: number;
+  /** Calls in which the caller had to repeat themselves. */
+  repeats: number;
 };
 
 export type PerformanceSummary = {
   range: "7d" | "30d";
   points: PerformancePoint[];
-  /** Escalations grouped by named blocker — the actionable cut. */
+  /**
+   * The immediately preceding period of equal length. Deltas are the whole
+   * reason a number on this screen means anything, and deriving one from the
+   * first and last point of the visible range measures noise instead.
+   */
+  previousPoints: PerformancePoint[];
+  /**
+   * Escalations grouped by named blocker — the actionable cut, and the reason
+   * §3.2 replaced confidence scores with named blockers in the first place.
+   * Counts sum to the escalated total over the same range.
+   */
   blockerBreakdown: { blocker: BlockerType; count: number }[];
   /** Which procedures are losing calls. */
   procedureHealth: {

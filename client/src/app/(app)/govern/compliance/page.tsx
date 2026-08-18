@@ -1,7 +1,7 @@
-import { PlannedSurface } from "@/components/screens/planned-surface";
+import { ComplianceGates } from "@/components/screens/compliance-gates";
 
 export const metadata = { title: "Compliance · Humanoid" };
 
 export default function Page() {
-  return <PlannedSurface title="Compliance" />;
+  return <ComplianceGates />;
 }

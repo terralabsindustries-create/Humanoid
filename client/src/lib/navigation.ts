@@ -238,6 +238,22 @@ export function resolveLabel(
   return typeof label === "function" ? label(lexicon) : label;
 }
 
+/**
+ * A nav item by id, across all modes.
+ *
+ * For the places that need to send someone to a destination they did not
+ * navigate to — "this fix is applied in Knowledge". Resolving through the nav
+ * table rather than writing the href inline means such a link cannot outlive
+ * the destination, and it inherits the destination's own lexicon label.
+ */
+export function navItemById(id: string): NavItem | null {
+  for (const mode of MODES) {
+    const item = mode.items.find((candidate) => candidate.id === id);
+    if (item) return item;
+  }
+  return null;
+}
+
 /** Capability check. "*" is the owner wildcard. */
 export function hasCapability(
   userCapabilities: string[],

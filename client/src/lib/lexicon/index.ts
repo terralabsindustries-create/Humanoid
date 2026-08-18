@@ -187,7 +187,31 @@ export function resolveLexicon(
  * and headings, so prose needs this.
  */
 export function lower(value: string): string {
+  // A term whose first two characters are both uppercase starts with an
+  // acronym — "AI employee", "SMS", "NHS referral". "aI employee" is not a
+  // sentence-case version of that, it is a typo, and it reaches the screen in
+  // every sentence that embeds the employee term.
+  if (/^\p{Lu}\p{Lu}/u.test(value)) return value;
   return value.charAt(0).toLowerCase() + value.slice(1);
+}
+
+/**
+ * "an appointment" / "a reservation" — the indefinite article for a noun that
+ * changes with the industry.
+ *
+ * Sentences in shared components cannot hardcode "a", because the word it sits
+ * in front of is chosen by the workspace's pack: the same string is "a
+ * Reservation" in a hotel and "an Appointment" in a clinic.
+ *
+ * It is the sound that decides, not the letter — "a unit", "an hour" — but
+ * every vowel-initial term across the ten packs today (Appointment, Attorney,
+ * Enquiry, Estimate, Intake, Invoice, Offer, Office, Order, Adjuster, AI
+ * employee) takes "an", so the letter rule is correct for all of them. A pack
+ * introducing a "Unit" or an "Hour" would need the exception listed here.
+ */
+export function withArticle(term: string, lowercase = true): string {
+  const word = lowercase ? lower(term) : term;
+  return `${/^[aeiou]/i.test(word) ? "an" : "a"} ${word}`;
 }
 
 /** "1 appointment" / "4 appointments" — count and term agreeing. */

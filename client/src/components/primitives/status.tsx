@@ -77,11 +77,18 @@ export function StatusDot({
 export function Status({
   tone,
   children,
+  icon,
   live = false,
   className,
 }: {
   tone: Tone;
   children: React.ReactNode;
+  /**
+   * Replaces the dot. A dot distinguishes states by hue alone, which is exactly
+   * what rule 3 forbids as the *only* channel — where a state has a shape of
+   * its own, pass it here and the shape does the work the colour cannot.
+   */
+  icon?: React.ReactNode;
   live?: boolean;
   className?: string;
 }) {
@@ -93,7 +100,7 @@ export function Status({
         className,
       )}
     >
-      <StatusDot tone={tone} live={live} />
+      {icon ?? <StatusDot tone={tone} live={live} />}
       {children}
     </span>
   );
