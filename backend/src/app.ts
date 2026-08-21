@@ -4,6 +4,7 @@ import cookie from "@fastify/cookie";
 import formbody from "@fastify/formbody";
 import rateLimit from "@fastify/rate-limit";
 import sensible from "@fastify/sensible";
+import websocket from "@fastify/websocket";
 import { env } from "@/config/env.js";
 import prismaPlugin from "@/plugins/prisma.js";
 import errorHandlerPlugin from "@/plugins/error-handler.js";
@@ -15,6 +16,7 @@ import { registerAiEmployeeRoutes } from "@/modules/ai-employees/ai-employee.rou
 import { registerConversationRoutes } from "@/modules/conversations/conversation.routes.js";
 import { registerUserRoutes } from "@/modules/users/user.routes.js";
 import { registerTwilioVoiceRoutes } from "@/modules/telephony/voice.routes.js";
+import { registerConversationRelay } from "@/modules/telephony/conversation-relay.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -29,13 +31,23 @@ export async function buildApp() {
 
   await app.register(sensible);
   await app.register(cors, {
-    origin: env.CORS_ORIGIN,
+    // In development the client's port drifts — anything already holding 3000
+    // pushes Next to 3001, then 3002 — and a fixed origin list turns each bump
+    // into a CORS rejection the browser reports as a generic network error,
+    // which is indistinguishable from being offline. Match any loopback port
+    // instead. Production still uses the explicit CORS_ORIGIN list.
+    origin:
+      env.NODE_ENV === "development"
+        ? [/^http:\/\/localhost:\d+$/, /^http:\/\/127\.0\.0\.1:\d+$/]
+        : env.CORS_ORIGIN,
     credentials: true,
   });
   await app.register(cookie, { secret: env.COOKIE_SECRET });
   // Twilio posts webhooks as application/x-www-form-urlencoded, which Fastify
   // has no parser for out of the box.
   await app.register(formbody);
+  // Twilio ConversationRelay holds one WebSocket open per phone call.
+  await app.register(websocket);
   await app.register(rateLimit, {
     global: true,
     max: 300,
@@ -57,6 +69,7 @@ export async function buildApp() {
       registerConversationRoutes(api);
       registerUserRoutes(api);
       registerTwilioVoiceRoutes(api);
+      registerConversationRelay(api);
     },
     { prefix: "/api/v1" },
   );

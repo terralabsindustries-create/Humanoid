@@ -146,20 +146,14 @@ bury the transcription blocks; rejected-signature warnings still print.
 
 ## AI receptionist (`modules/telephony/ai-receptionist.ts`)
 
-Set `ANTHROPIC_API_KEY` and the same phone line stops echoing and starts
-answering: each transcribed phrase goes to Claude prompted with the
+Set a model key and the same phone line stops echoing and starts answering:
+each transcribed phrase goes to the model prompted with the
 `AiEmployeeConfigurationVersion` that onboarding wrote, and the reply is
 spoken back. This is the first thing that actually *uses* what onboarding
 produces.
 
-Without the key nothing breaks — the line degrades to the transcription probe
+Without a key nothing breaks — the line degrades to the transcription probe
 above, and logs which mode it answered in.
-
-**Conversation state is an in-memory `Map` keyed by CallSid**, not a table. Call
-transcripts are a real feature with their own schema and a frontend surface;
-a Map that dies with the process is honestly temporary, where a half-built
-`calls` table would look like the real thing. Rule 13 in the root `CLAUDE.md`
-is the reasoning.
 
 **Which employee answers** is resolved by `AI_EMPLOYEE_WORKSPACE_ID`, or the
 most recently configured one when that's blank. Correct with a single tenant,
@@ -167,24 +161,98 @@ wrong with two — it's a stopgap until a phone-number → workspace mapping
 exists, and the choice is printed on every call so a wrong answer is visible
 rather than silent.
 
-Model settings worth knowing before changing them:
-
-- **Thinking stays on at `effort: "low"`.** Disabling thinking on Claude Opus 5
-  can leak `<thinking>` tags into the response — which a phone line would read
-  aloud to the caller. Low effort keeps latency down without that risk.
-- **`fallbacks: "default"`** re-runs a turn server-side if a safety classifier
-  declines it, so a refusal becomes an answer rather than dead air.
-- **The system prompt fights verbosity deliberately.** Claude Opus 5 writes
-  longer answers by default, and length that reads fine on screen is painful
-  to sit through on a call.
-
-**Latency is the honest weak point.** A turn costs Twilio's end-of-speech
-detection (~1–2s) plus a model round-trip, so expect a few seconds of silence
-between speaking and hearing a reply. `ANTHROPIC_MODEL` is the knob —
-`claude-sonnet-5` or `claude-haiku-4-5` are faster and less capable. Making it
-feel conversational needs streaming audio (Twilio Media Streams), which is a
-different architecture, not a tuning change.
+`buildSystemPrompt()` is shared by both transports below. There is deliberately
+no second prompt: if the relay and the `<Gather>` fallback built their own, the
+tenant's configuration would stop being the one thing deciding how their
+employee behaves.
 
 Still not real: no calendar, no knowledge base, no customer records, no
 booking. The prompt tells the employee to say so rather than inventing
 availability — but it can only promise a follow-up, not take an action.
+
+## Realtime voice — Twilio ConversationRelay (default)
+
+The production voice path. One WebSocket per call:
+
+```
+caller → Twilio (STT) → relay socket → Groq (streaming) → text frames
+       → Twilio (ElevenLabs TTS) → caller
+```
+
+| Piece | Owner |
+| --- | --- |
+| Telephony, speech recognition, speech synthesis | Twilio |
+| Voice (ElevenLabs) | Twilio, using a credential on the Twilio account |
+| Language model | Groq, via its OpenAI-compatible endpoint |
+| Prompt, tenant config, turn logic, transcript | this backend |
+| Durable conversation record | Postgres |
+
+**No audio and no ElevenLabs key touch this process.** What crosses the socket
+is JSON text in both directions. That is the reason `ELEVENLABS_API_KEY` does
+not appear in `.env.example`: `ELEVENLABS_VOICE_ID` and `ELEVENLABS_MODEL_ID`
+are identifiers naming a voice for Twilio to request, not credentials.
+
+| File | Job |
+| --- | --- |
+| `voice.routes.ts` | Answers `/incoming` with `<Connect><ConversationRelay>` |
+| `voice-token.ts` | Signed token binding one socket to one CallSid + tenant |
+| `conversation-relay.ts` | The `GET /api/v1/twilio/voice/relay` socket |
+| `voice-session.service.ts` | Turn state, cancellation, streaming, persistence |
+| `tts-chunker.ts` | Cuts model deltas into speakable frames |
+| `relay-protocol.ts` | The wire types |
+
+### How a socket is authenticated
+
+Twilio does not sign the WebSocket upgrade the way it signs a webhook, so trust
+is carried forward from the request that *was* signed. `/incoming` resolves the
+tenant, mints a 5-minute HMAC token naming it, and puts it in the `wss://` URL.
+`preValidation` rejects the upgrade if the token fails, and the `setup` message
+must announce the CallSid the token was minted for or the socket closes.
+
+The session therefore reads its workspace out of a token this process signed,
+never out of anything the socket claimed. That is what keeps tenant isolation
+real on a transport with no per-message signature.
+
+### Barge-in
+
+`interruptible="true"` on the noun is what lets the caller physically talk over
+the agent; the rest is this backend's problem. Every caller utterance
+increments a turn id, and every frame is checked against the current one on its
+way out, so a superseded generation cannot reach the caller no matter where it
+had got to. The model stream is aborted too, but aborts are asynchronous — the
+turn-id check is what actually makes it safe.
+
+**What gets recorded is what the caller heard.** Twilio reports
+`utteranceUntilInterrupt`; everything after it was discarded before reaching
+the speaker, so it is never persisted and never enters the model's context. A
+transcript claiming the agent said something nobody heard would poison the next
+turn as well as the record.
+
+### Latency
+
+`[VOICE]` lines timestamp the path that matters: transcript received → Groq
+generation started → first LLM token → first frame sent. Groq is chosen for
+time-to-first-token, and nothing buffers a complete response — the first clause
+leaves for synthesis while the model is still writing. `TTS_CHUNKER`'s first
+frame goes at the first word boundary past ~12 characters; later frames wait
+for clause boundaries, by which point audio is already playing.
+
+Transcript text is deliberately never logged. Call content belongs in the
+conversation row, which is access-controlled, and nowhere else.
+
+### The `<Gather>` fallback
+
+`VOICE_RELAY_ENABLED=false` reverts to the older synchronous loop documented
+above: one HTTP turn per phrase, Twilio's built-in TTS, no barge-in, and a few
+seconds of dead air per turn. Kept because it still transcribes when the relay
+is unavailable, which is a more useful degradation than a silent socket.
+
+### Testing it
+
+`test/voice-relay.test.ts` drives a real webhook and a real WebSocket against a
+real Fastify and Postgres, with only Groq mocked — including the barge-in race,
+a mid-stream model failure, and socket cleanup. No paid provider is called.
+
+```bash
+pnpm test
+```

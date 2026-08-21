@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/db/client.js";
 
 /**
@@ -62,6 +63,13 @@ export type RecordTurnInput = {
   confidence?: number | null;
   /** Model round-trip in ms, for AI turns. Kept for latency analysis. */
   latencyMs?: number | null;
+  /**
+   * Merged into `metadata_json` alongside `latencyMs`. The realtime voice path
+   * uses it to record time-to-first-token and whether the caller talked over
+   * this turn — facts about how the turn was produced, not about what was
+   * said, which is why they live here and not in new columns.
+   */
+  metadata?: Prisma.InputJsonObject;
 };
 
 export async function recordTurn(input: RecordTurnInput): Promise<void> {
@@ -80,14 +88,21 @@ export async function recordTurn(input: RecordTurnInput): Promise<void> {
         contentType: "text",
         textContent: input.text,
         confidence: input.confidence ?? null,
-        metadataJson: input.latencyMs != null ? { latencyMs: input.latencyMs } : {},
+        metadataJson: {
+          ...(input.latencyMs != null ? { latencyMs: input.latencyMs } : {}),
+          ...(input.metadata ?? {}),
+        },
       },
     });
   });
 }
 
-/** `outcomeCode`: completed | no_speech | turn_limit | error */
-export async function endCall(conversationId: string, outcomeCode: string): Promise<void> {
+/** `outcomeCode`: completed | no_speech | turn_limit | caller_hung_up | error */
+export async function endCall(
+  conversationId: string,
+  outcomeCode: string,
+  latencyMetrics?: Prisma.InputJsonObject,
+): Promise<void> {
   const endedAt = new Date();
 
   // The first caller turn is the closest thing we have to an intent, and it
@@ -106,7 +121,13 @@ export async function endCall(conversationId: string, outcomeCode: string): Prom
       endedAt,
       outcomeCode,
       summary: firstCustomerTurn?.textContent ?? null,
-      callSession: { update: { status: "completed", endedAt } },
+      callSession: {
+        update: {
+          status: "completed",
+          endedAt,
+          ...(latencyMetrics ? { latencyMetricsJson: latencyMetrics } : {}),
+        },
+      },
     },
   });
 }

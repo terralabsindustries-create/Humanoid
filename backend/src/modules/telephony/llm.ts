@@ -99,3 +99,78 @@ export async function generateReply(system: string, turns: Turn[]): Promise<Repl
     ? replyViaOpenAiCompatible(system, turns)
     : replyViaAnthropic(system, turns);
 }
+
+/**
+ * One piece of a reply as it is being written. `delta` carries new text;
+ * exactly one `end` arrives last and explains why the model stopped.
+ */
+export type ReplyChunk = { kind: "delta"; text: string } | { kind: "end"; reason: ReplyReason };
+
+/**
+ * The streaming form of `generateReply`, for the realtime voice path.
+ *
+ * On a phone call the whole reply is worth nothing until the first word is
+ * audible, so the caller of this function starts speaking off the first delta
+ * rather than waiting for a finished paragraph.
+ *
+ * `signal` is the barge-in lever: aborting it stops the HTTP request to the
+ * model mid-body, and the generator returns without a final `end` chunk —
+ * silence is the correct output for a turn nobody is listening to any more.
+ */
+export async function* streamReply(
+  system: string,
+  turns: Turn[],
+  signal?: AbortSignal,
+): AsyncGenerator<ReplyChunk> {
+  if (activeProvider() !== "openai") {
+    // The Anthropic path stays request/response. It exists for the `<Gather>`
+    // fallback, and a second streaming integration for a provider the realtime
+    // line does not use would be code with no caller.
+    const reply = await replyViaAnthropic(system, turns);
+    if (signal?.aborted) return;
+    if (reply.text.length > 0) yield { kind: "delta", text: reply.text };
+    yield { kind: "end", reason: reply.reason };
+    return;
+  }
+
+  openAiClient ??= new OpenAI({
+    apiKey: env.LLM_API_KEY ?? "not-needed",
+    baseURL: env.LLM_BASE_URL,
+  });
+
+  let reason: ReplyReason = "ok";
+
+  try {
+    const stream = await openAiClient.chat.completions.create(
+      {
+        model: env.LLM_MODEL,
+        max_tokens: MAX_TOKENS,
+        stream: true,
+        messages: [
+          { role: "system", content: system },
+          ...turns.map((turn) => ({ role: turn.role, content: turn.text }) as const),
+        ],
+      },
+      signal ? { signal } : {},
+    );
+
+    for await (const chunk of stream) {
+      if (signal?.aborted) return;
+
+      const choice = chunk.choices[0];
+      if (!choice) continue;
+
+      const text = choice.delta?.content;
+      if (typeof text === "string" && text.length > 0) yield { kind: "delta", text };
+
+      if (choice.finish_reason === "content_filter") reason = "refusal";
+      else if (choice.finish_reason === "length") reason = "truncated";
+    }
+  } catch (error) {
+    // An abort is the expected end of an interrupted turn, not a failure.
+    if (signal?.aborted) return;
+    throw error;
+  }
+
+  yield { kind: "end", reason };
+}

@@ -13,7 +13,7 @@ import { endCall, recordTurn, startCall } from "@/modules/conversations/conversa
  * where a half-built `calls` table would look like the real thing.
  */
 
-type ResolvedEmployee = {
+export type ResolvedEmployee = {
   workspaceId: string;
   employeeId: string;
   employeeName: string;
@@ -63,9 +63,49 @@ export async function resolveAiEmployee(): Promise<ResolvedEmployee | null> {
     },
   });
 
-  if (!employee) return null;
+  return employee ? toResolvedEmployee(employee) : null;
+}
 
+/**
+ * The same employee, by id.
+ *
+ * The realtime relay uses this rather than re-running the "who picks up?"
+ * heuristic above: the socket already carries a signed token naming the
+ * employee the webhook chose, and re-deciding seconds later could land on a
+ * different one — `resolveAiEmployee` orders by `updatedAt`, so another
+ * tenant saving their configuration mid-call would be enough to change the
+ * answer. Loading exactly what the token names removes the race.
+ */
+export async function resolveAiEmployeeById(employeeId: string): Promise<ResolvedEmployee | null> {
+  const employee = await prisma.aiEmployee.findUnique({
+    where: { id: employeeId },
+    include: {
+      workspace: { include: { organization: true } },
+      configurationVersions: true,
+    },
+  });
+
+  return employee ? toResolvedEmployee(employee) : null;
+}
+
+function toResolvedEmployee(employee: {
+  id: string;
+  name: string;
+  roleName: string;
+  timezone: string;
+  workspaceId: string;
+  currentConfigurationVersionId: string | null;
+  workspace: { name: string; industryKey: string | null; organization: { name: string } | null } | null;
+  configurationVersions: {
+    id: string;
+    behaviorJson: unknown;
+    escalationRulesJson: unknown;
+    operatingRulesJson: unknown;
+  }[];
+}): ResolvedEmployee | null {
   const version = employee.configurationVersions.find((v) => v.id === employee.currentConfigurationVersionId);
+  // An employee onboarding never finished configuring has nothing to answer
+  // with, which is not the same as no employee existing.
   if (!version) return null;
 
   return {
@@ -88,7 +128,13 @@ export function greetingFor(employee: ResolvedEmployee | null): string {
   return `Thanks for calling ${employee.businessName}. This is ${employee.employeeName}. How can I help you today?`;
 }
 
-function buildSystemPrompt(employee: ResolvedEmployee): string {
+/**
+ * Shared by both transports. The `<Gather>` loop and the realtime relay must
+ * put the same words in the employee's mouth — a second prompt built somewhere
+ * else would drift, and the tenant's configuration would stop being the single
+ * thing that decides how their employee behaves.
+ */
+export function buildSystemPrompt(employee: ResolvedEmployee): string {
   return [
     `You are ${employee.employeeName}, the ${employee.roleName} for ${employee.businessName}.`,
     `You are speaking with a customer on a live phone call. Their timezone is ${employee.timezone}.`,
@@ -137,20 +183,20 @@ function evictStaleConversations(): void {
 export type StartCallContext = { from: string; to: string };
 
 /**
- * Opens the durable record and the in-memory working context together.
- * A persistence failure must not drop the call, so it degrades to an
- * unrecorded conversation rather than throwing at the caller.
+ * Opens the durable `conversations` row for a call, on either transport.
+ *
+ * Idempotent on CallSid inside `startCall`, so a retried webhook resumes the
+ * existing call rather than starting a second one. A persistence failure must
+ * not drop the call, so it degrades to an unrecorded conversation — returning
+ * null — rather than throwing at the caller.
  */
-export async function startConversation(
+export async function createCallRecord(
   callSid: string,
   employee: ResolvedEmployee,
   context: StartCallContext,
-): Promise<void> {
-  evictStaleConversations();
-
-  let conversationId: string | null = null;
+): Promise<string | null> {
   try {
-    conversationId = await startCall({
+    return await startCall({
       workspaceId: employee.workspaceId,
       aiEmployeeId: employee.employeeId,
       providerCallId: callSid,
@@ -160,8 +206,18 @@ export async function startConversation(
     });
   } catch (error) {
     console.error("[Twilio] could not record call:", error instanceof Error ? error.message : error);
+    return null;
   }
+}
 
+/** Opens the durable record and the `<Gather>` loop's in-memory context together. */
+export async function startConversation(
+  callSid: string,
+  employee: ResolvedEmployee,
+  context: StartCallContext,
+): Promise<void> {
+  evictStaleConversations();
+  const conversationId = await createCallRecord(callSid, employee, context);
   conversations.set(callSid, { employee, turns: [], startedAt: Date.now(), conversationId });
 }
 

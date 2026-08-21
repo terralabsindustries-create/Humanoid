@@ -16,13 +16,40 @@ const optionalString = z
     return trimmed && trimmed.length > 0 ? trimmed : undefined;
   });
 
+/**
+ * `z.coerce.boolean()` is a trap for env flags: `Boolean("false")` is `true`,
+ * so an explicit opt-out would silently read as an opt-in. This reads the
+ * words people actually write in a `.env`.
+ */
+const booleanFlag = (fallback: boolean) =>
+  z
+    .union([z.boolean(), z.string()])
+    .optional()
+    .transform((value) => {
+      if (typeof value === "boolean") return value;
+      const normalized = value?.trim().toLowerCase();
+      if (normalized === undefined || normalized.length === 0) return fallback;
+      return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+    });
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   JWT_ACCESS_SECRET: z.string().min(32, "JWT_ACCESS_SECRET must be at least 32 characters"),
   COOKIE_SECRET: z.string().min(32, "COOKIE_SECRET must be at least 32 characters"),
-  CORS_ORIGIN: z.string().min(1),
+  // Comma-separated. A dev server that finds its port taken silently moves to
+  // the next one (3000 → 3001), and a single hardcoded origin turns that into a
+  // CORS failure the browser reports as a generic network error.
+  CORS_ORIGIN: z
+    .string()
+    .min(1)
+    .transform((value) =>
+      value
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0),
+    ),
   ACCESS_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(15),
   REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().positive().default(30),
   OTP_TTL_MINUTES: z.coerce.number().int().positive().default(10),
@@ -66,6 +93,33 @@ const schema = z.object({
   // onboarded workspace's AI employee answers the test number. Unset means
   // "the most recently configured one".
   AI_EMPLOYEE_WORKSPACE_ID: optionalString,
+
+  // Realtime voice — Twilio ConversationRelay.
+  //
+  // Twilio holds one WebSocket open for the whole call and owns both speech
+  // recognition and text-to-speech; this backend exchanges JSON *text* with
+  // it. That is why there is no ElevenLabs key here — the ElevenLabs
+  // credential lives in the Twilio Console, and audio never transits this
+  // process. Off flips the phone line back to the `<Gather>` loop.
+  VOICE_RELAY_ENABLED: booleanFlag(true),
+  // Passed straight through to <ConversationRelay ttsProvider>. "ElevenLabs"
+  // requires an ElevenLabs credential configured on the Twilio account.
+  TWILIO_TTS_PROVIDER: z.string().default("ElevenLabs"),
+  TWILIO_TRANSCRIPTION_PROVIDER: optionalString,
+  TWILIO_SPEECH_MODEL: optionalString,
+  // Identifiers, not credentials — they name a voice for Twilio to ask
+  // ElevenLabs for, and are worthless to anyone who has them. The actual
+  // ElevenLabs secret lives on the Twilio account; this process never holds
+  // one and never speaks to ElevenLabs directly.
+  ELEVENLABS_VOICE_ID: optionalString,
+  ELEVENLABS_MODEL_ID: optionalString,
+  // How eagerly Twilio treats caller speech as a barge-in.
+  VOICE_RELAY_INTERRUPT_SENSITIVITY: z.enum(["low", "medium", "high"]).default("medium"),
+  // Signs the short-lived handshake token that binds a relay socket to one
+  // CallSid and tenant. Falls back to COOKIE_SECRET, which is always present.
+  VOICE_RELAY_TOKEN_SECRET: optionalString,
+  // Stops a forgotten call from looping on Twilio's dime.
+  VOICE_RELAY_MAX_TURNS: z.coerce.number().int().positive().default(50),
 });
 
 const parsed = schema.safeParse(process.env);
