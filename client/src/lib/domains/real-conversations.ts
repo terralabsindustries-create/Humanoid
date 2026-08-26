@@ -1,4 +1,10 @@
-import type { Conversation, ConversationOutcome, ConversationStatus, Turn } from "@/lib/domain/types";
+import {
+  LIVE_STATUSES,
+  type Conversation,
+  type ConversationOutcome,
+  type ConversationStatus,
+  type Turn,
+} from "@/lib/domain/types";
 import type { ConversationFilters } from "@/lib/services/contract";
 import * as api from "@/lib/services/http/conversations";
 import { HttpError } from "@/lib/services/http/client";
@@ -8,14 +14,14 @@ import { HttpError } from "@/lib/services/http/client";
  * to the rich `Conversation` shape the frontend renders.
  *
  * The backend only knows what the voice pipeline actually captured: a
- * transcript, when the call started and ended, and why it ended. Everything
- * this product can show but the backend cannot yet produce — a live control
- * handoff, grounding citations, actions taken, a procedure run, human
- * interventions, sentiment — is left at its honest empty value rather than
- * invented. See rule 13 in the root CLAUDE.md.
+ * transcript, when the call started and ended, why it ended, and — since the
+ * customer directory became real — who rang. Everything this product can show
+ * but the backend cannot yet produce — a live control handoff, grounding
+ * citations, actions taken, a procedure run, human interventions, sentiment —
+ * is left at its honest empty value rather than invented. See rule 13 in the
+ * root CLAUDE.md.
  */
 
-const LIVE_STATUSES: ConversationStatus[] = ["ringing", "active", "waiting", "wrapping"];
 
 function mapStatus(status: string): ConversationStatus {
   return status === "active" ? "active" : "ended";
@@ -56,8 +62,13 @@ function mapConversation(c: api.ApiConversation, locationId: string): Conversati
     activity: "idle",
     startedAt: c.startedAt,
     endedAt: c.endedAt,
-    partyId: null,
-    fromLabel: c.callSession?.fromNumber ?? "Unknown caller",
+    partyId: c.partyId,
+    // The person, not whichever end happens to be `from`. On an outbound call
+    // the business dials *from* its own number, so reading `fromNumber` shows
+    // the AI's number where the customer's should be.
+    fromLabel:
+      (c.direction === "outbound" ? c.callSession?.toNumber : c.callSession?.fromNumber) ??
+      "Unknown caller",
     intent: c.summary,
     outcome: mapOutcome(c.status, c.outcomeCode),
     blocker: null,
@@ -84,14 +95,16 @@ export async function listRealConversations(
   locationId: string,
   filters: ConversationFilters,
 ): Promise<Conversation[]> {
-  const raw = await api.listConversations(workspaceId, filters.limit);
+  // `partyId` is the one filter the backend applies, because one person's
+  // history has to reach past whatever the most recent page happens to hold.
+  const raw = await api.listConversations(workspaceId, {
+    limit: filters.limit,
+    partyId: filters.partyId,
+  });
   let list = raw.map((c) => mapConversation(c, locationId));
 
   if (filters.live) list = list.filter((c) => LIVE_STATUSES.includes(c.status));
   if (filters.employeeId) list = list.filter((c) => c.employeeId === filters.employeeId);
-  // Real conversations have no verified party yet (rule 13) — any partyId
-  // filter honestly matches nothing rather than guessing at an identity.
-  if (filters.partyId) list = list.filter((c) => c.partyId === filters.partyId);
   if (filters.outcome?.length) list = list.filter((c) => filters.outcome!.includes(c.outcome));
   if (filters.channel?.length) list = list.filter((c) => filters.channel!.includes(c.channel));
   if (filters.search) {

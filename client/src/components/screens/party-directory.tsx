@@ -313,7 +313,7 @@ function PartyRow({
 
       <div className="mt-0.5 flex items-center justify-between gap-2">
         <span className="truncate font-mono text-xs text-muted">
-          {party.phone ?? party.email ?? "No contact details"}
+          {contactLine(party)}
         </span>
         {unconfirmed.length > 0 && (
           // A count, not a state: these facts are a mix of AI-noted and
@@ -324,6 +324,19 @@ function PartyRow({
       </div>
     </button>
   );
+}
+
+/**
+ * The line under the name.
+ *
+ * Somebody nobody has named yet *is* their number — that is what sits in the
+ * title — so repeating it here would fill the row with one string twice.
+ * Saying why the title is a number is more use than saying it again.
+ */
+function contactLine(party: Party): string {
+  const contact = party.phone ?? party.email;
+  if (!contact) return "No contact details";
+  return contact === party.displayName ? "Name not given" : contact;
 }
 
 function ListSkeleton({ label }: { label: string }) {
@@ -479,8 +492,12 @@ function PartyRecord({
         >
           {unconfirmed.length === 0 ? (
             <p className="text-sm text-muted">
-              Everything on this record has been confirmed by a person or came
-              from a connected system.
+              {party.facts.length === 0
+                ? // "Everything is confirmed" would be a strange thing to say
+                  // about a record holding nothing, and it contradicts the
+                  // band below it saying nothing has been verified.
+                  `Nothing to check yet. The AI has not noted anything about this ${lower(lexicon.party.one)} beyond how to reach them.`
+                : "Everything on this record has been confirmed by a person or came from a connected system."}
             </p>
           ) : (
             <ul className="space-y-1.5">
@@ -544,6 +561,7 @@ function PartyRecord({
           <History
             conversations={conversationsQuery.data ?? []}
             records={recordsQuery.data ?? []}
+            displayName={party.displayName}
             loading={conversationsQuery.isPending || recordsQuery.isPending}
           />
         </Band>
@@ -769,10 +787,13 @@ function FactRow({
 function History({
   conversations,
   records,
+  displayName,
   loading,
 }: {
   conversations: Conversation[];
   records: DomainRecord[];
+  /** Who the directory currently says this is — see the note on the name line below. */
+  displayName: string;
   loading: boolean;
 }) {
   const lexicon = useLexicon();
@@ -809,6 +830,13 @@ function History({
       detail: [
         String(record.fields.reason ?? record.fields.source ?? ""),
         record.scheduledAt ? `For ${dayAndTime(record.scheduledAt)}` : "",
+        // One phone can belong to a household, and the name a booking was
+        // taken under is the only evidence of that. Said only when the two
+        // disagree — repeating the name at the top of the record on every
+        // row would be noise.
+        record.partyName && record.partyName !== displayName
+          ? `Booked under ${record.partyName}`
+          : "",
       ]
         .filter(Boolean)
         .join(" · "),

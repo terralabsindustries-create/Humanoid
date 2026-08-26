@@ -18,7 +18,7 @@ import {
 } from "@/lib/domain/labels";
 import { count } from "@/lib/lexicon";
 import { useLexicon } from "@/components/providers/app-providers";
-import { relative } from "@/lib/utils/time";
+import { relativeAgo } from "@/lib/utils/time";
 import type { IssueSeverity, ReviewIssue } from "@/lib/domain/types";
 
 /**
@@ -105,7 +105,7 @@ export function ReviewIssueRow({ issue }: { issue: ReviewIssue }) {
               affected
             </span>
             <span aria-hidden>·</span>
-            <span>last seen {relative(issue.lastSeenAt)} ago</span>
+            <span>last seen {relativeAgo(issue.lastSeenAt)}</span>
             <span aria-hidden>·</span>
             <span>
               {issue.proposedFix

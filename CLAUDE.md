@@ -15,7 +15,7 @@ what's actually built.
 A pnpm workspace, root-level (`/pnpm-workspace.yaml`, `/package.json`) — not
 two independent projects. `client/` and `backend/` each keep their own
 package.json/scripts; run `pnpm <script>` from the root to fan out to both,
-or `pnpm --filter client <script>` / `pnpm --filter backend <script>` for
+or `pnpm --filter ./client <script>` / `pnpm --filter ./backend <script>` for
 one. The shared spec docs (`architecture.md`, `api.md`, `database.md`,
 `ai.md`, `vision.md`, `roadmap.md`, `ui.md`, this file) live at the repo
 root, outside both packages, because both read them.
@@ -49,11 +49,16 @@ no real frontend yet (knowledge, workflows, integrations, billing) — see the
 `node_modules/.ignored`. If that happens: delete the stray lockfile and
 `node_modules`, then `pnpm install` from the root.
 
+Workspace scripts filter by **directory** (`--filter ./client`), not by package
+name. `client/package.json` is named `humanoid`, so `--filter client` matches
+nothing and pnpm exits 0 — which meant `pnpm lint` silently skipped the entire
+frontend for as long as it existed. Keep the `./` prefix.
+
 ```bash
 pnpm install                    # once, from the root — installs both packages
 pnpm dev                        # both dev servers in parallel (client:3000, backend:4000)
-pnpm --filter client dev        # frontend only
-pnpm --filter backend dev       # backend only
+pnpm --filter ./client dev      # frontend only
+pnpm --filter ./backend dev     # backend only
 pnpm build                      # both production builds
 pnpm lint                       # both linters
 pnpm test                       # backend test suite (client has no test suite yet)
@@ -79,7 +84,8 @@ TypeScript strict · Tailwind v4 (CSS-first `@theme`) · Motion · Radix ·
 TanStack Query (server state) · Zustand (UI state) · cmdk · Lucide.
 
 **Backend** (`backend/`): Fastify 5 · TypeScript strict (NodeNext ESM) ·
-Prisma · PostgreSQL · `argon2` (password hashing) · `jose` (JWT) · Vitest.
+Prisma · PostgreSQL · `argon2` (password hashing) · `jose` (JWT) ·
+`@fastify/websocket` (the ConversationRelay voice socket) · Vitest.
 Chosen over Python because everything currently being built (auth, workspace
 CRUD, onboarding persistence) is exactly what `architecture.md` already
 suggests TypeScript/Fastify for — the AI-orchestration layer where Python's
@@ -119,11 +125,12 @@ lib/
   services/contract.ts     the API contract — mock and HTTP both satisfy it
   services/mock.ts         mock impl for knowledge/workflows/etc. — intentionally still fake,
                             see "Isolate demo data" below. Delegates workspace identity to
-                            onboarded-workspace.ts, and conversations to real-conversations.ts,
-                            when a real onboarded tenant exists.
+                            onboarded-workspace.ts, and conversations/records/parties/employees
+                            to their real-*.ts adapters, when a real onboarded tenant exists.
   services/auth/           contract + http.ts (real, default) + mock.ts (offline fallback)
   services/http/           the real backend client — client.ts (cookies + silent refresh-on-401),
-                            workspaces.ts, onboarding.ts, ai-employees.ts, conversations.ts
+                            workspaces.ts, onboarding.ts, ai-employees.ts, conversations.ts,
+                            records.ts, parties.ts, review.ts
   mock/fixtures.ts         Northgate Health — fictional 3-site clinic group (the permanent demo tenant)
   tokens/                  motion + sound tokens
   store/                   preferences, scope, auth (local cache, not the security boundary),
@@ -195,17 +202,17 @@ lib/
     (`GET /me`) now, not a localStorage read — it overrides
     `getWorkspace`/`listLocations`/`getCurrentUser`, routes conversations to
     the real Twilio-backed data via `lib/domains/real-conversations.ts`, and
-    zeroes whatever's still mock-only (approvals, usage, review issues) rather
+    zeroes whatever's still mock-only (approvals, usage) rather
     than mixing a chosen industry with Northgate's dental-clinic data.
 
 13. **Isolate demo data behind explicit adapters — never fabricate a backend
-    for a feature that isn't real.** Auth, workspaces, onboarding, and
-    conversations are real (Postgres-backed, `backend/`). Knowledge,
-    workflows, integrations, review, records, live activity beyond a call's
-    own transcript are not — and stay exactly as visible, intentional mock
-    data (`lib/mock/fixtures.ts`, `lib/services/mock.ts`) rather than being
-    given a fake-real backend that would make them indistinguishable from the
-    parts that actually work. When a feature crosses from mock to real, it
+    for a feature that isn't real.** Auth, workspaces, onboarding,
+    conversations, records, the customer directory and review are real
+    (Postgres-backed, `backend/`). Knowledge, workflows, integrations,
+    live activity beyond a call's own transcript are not — and stay
+    exactly as visible, intentional mock data (`lib/mock/fixtures.ts`,
+    `lib/services/mock.ts`) rather than being given a fake-real backend that
+    would make them indistinguishable from the parts that actually work. When a feature crosses from mock to real, it
     gets its own backend module and Prisma tables — it does not retroactively
     make the *other* still-mock features look more real by association.
 
@@ -274,23 +281,172 @@ every other telephony/AI-runtime-backed surface remain intentional,
 clearly-isolated mock data — see rule 13 above.
 
 **Twilio voice line** (`backend/src/modules/telephony/`): a real,
-signature-verified webhook pair that answers an inbound call and transcribes
-each phrase. With `ANTHROPIC_API_KEY` set it also *replies* — Claude prompted
-with the `AiEmployeeConfigurationVersion` onboarding wrote, spoken back down
-the phone. This is the first thing that consumes onboarding's output rather
-than just producing it.
+signature-verified inbound call that replies in a natural voice, using the
+`AiEmployeeConfigurationVersion` onboarding wrote. This is the first thing that
+consumes onboarding's output rather than just producing it.
+
+The division of labour, which is the thing to keep straight:
+
+| Twilio | telephony, speech recognition, speech synthesis |
+| Groq | the language model, streaming, OpenAI-compatible endpoint |
+| ElevenLabs | the voice — reached *by Twilio*, not by this backend |
+| Humanoid | prompt, tenant config, turn logic, orchestration |
+| Postgres | the canonical transcript |
+
+`LLM_PROVIDER=openai` means the OpenAI *wire format*, not OpenAI the company.
+Groq is the active provider and swapping it for Anthropic/Gemini/OpenAI is a
+config change, not a code change. Don't "fix" it.
+
+**No ElevenLabs key lives in this backend.** The realtime path is Twilio
+ConversationRelay: one WebSocket per call carrying JSON *text* both ways, with
+Twilio doing STT at one end and ElevenLabs TTS at the other. `ELEVENLABS_VOICE_ID`
+and `ELEVENLABS_MODEL_ID` are identifiers naming a voice for Twilio to request;
+and no ElevenLabs credential exists anywhere in this system — not in this
+backend and not in the Twilio Console. ElevenLabs is a first-party
+ConversationRelay TTS provider that Twilio bills for. Adding an ElevenLabs SDK call
+here would mean audio transiting this process for no reason — see
+`backend/README.md` § Realtime voice.
+
+**Which tenant answers is decided by the number dialled** —
+`workspaces.phone_number`, unique, resolved by `resolveEmployeeForCall()`.
+`AI_EMPLOYEE_WORKSPACE_ID` is a fallback for unclaimed numbers, and "most
+recently configured employee anywhere" is the last-resort dev convenience that
+answers as the wrong business as soon as a second tenant exists. Don't reorder
+those rungs, and don't quietly reintroduce the global lookup as the default.
+
+Three rules in that module are easy to break:
+
+- **Anything in `content` gets read aloud.** Some reasoning models put their
+  thinking there rather than in a separate field, so an unguarded call opens
+  with the employee saying "Here's a thinking process: 1. Analyze User Input".
+  `LLM_REASONING_EFFORT=none` prevents it and `ReasoningStripper` (`llm.ts`)
+  catches it; don't remove either because output "looks clean" on the model
+  you happened to test.
+- **A superseded turn must never reach the caller.** Barge-in is enforced by a
+  turn id checked on every outbound frame, not by the AbortController alone —
+  aborts are asynchronous. See `voice-session.service.ts`.
+- **What gets persisted is what the caller *heard***, not what the model wrote.
+  On an interruption Twilio's `utteranceUntilInterrupt` wins over our own
+  accumulation, and it feeds the model's context too.
+
+`VOICE_RELAY_ENABLED=false` reverts to the older synchronous `<Gather>` loop
+(Twilio's built-in TTS, no barge-in, seconds of dead air per turn). It is kept
+as a degradation path, not as the main road.
+
+**Records are now real too** (`backend/src/modules/records`, `records` table).
+`create_booking` is a tool the model can call mid-turn, and
+`lib/domains/real-records.ts` maps what it writes onto the same `DomainRecord`
+the Northgate fixtures use — so `/records` renders a real tenant's actual
+bookings, in its own industry's words, and Northgate keeps its own. This is
+the first thing an AI employee *does* rather than says. A caller can also
+change what they booked: `find_bookings`, `reschedule_booking` and
+`cancel_booking` are the other three tools in `telephony/booking-tool.ts`, and
+two rules in them are the reason they exist at all.
+
+- **Rescheduling moves the row.** With only `create_booking` available, a
+  caller ringing back to move Thursday to Friday got a *second* booking and
+  the first stayed confirmed — two tables held for one party, and a transcript
+  that reads like a good call. Never re-add a cancel-then-create path.
+- **Nothing is guessed.** Bookings are found by the caller's own number, never
+  by a spoken reference; an ambiguous or unmatched request comes back as the
+  list of what they actually have, for the employee to confirm out loud before
+  anything is written.
+
+**And now there is a diary to check** (`backend/src/modules/schedule`,
+`business_hours` + `schedule_exceptions` + `booking_policies`). Before it,
+`create_booking` wrote whatever the caller said — three in the morning at a
+clinic that opens at eight, the twentieth table at a restaurant that seats
+twelve — confirmed aloud, landing in `records` looking like a good booking,
+and invisible until somebody arrived at a locked door. `check_availability` is
+the fifth tool, and the one the prompt used to explicitly forbid.
+
+Two rules hold the whole module up, and both are about not overclaiming:
+
+- **An unconfigured schedule is not a closed business.** Every workspace
+  predating this has no rows in any of the three tables, and books exactly as
+  it always did. Had "no rows" meant "shut", this would have taken every
+  tenant's phone line down on deploy — the same failure `shouldAnswerCall()`
+  fails open to avoid. Each check is independently skippable and a verdict
+  reports which ones actually ran.
+- **An unchecked slot is never reported as a free one.** "I cannot see the
+  diary" and "that time is available" are different sentences. The middle
+  state is the one a real tenant sits in longest: hours set but no capacity
+  means the employee knows it is *open* at seven and knows nothing about
+  whether there is room, and `buildSystemPrompt` says exactly that. Three
+  distinct prompt states, asserted in `test/availability.test.ts`.
+
+A prompt is not an enforcement point, so `create_booking` and
+`reschedule_booking` re-run the check themselves before writing. It fails open
+on error — a clash staff can resolve costs less than refusing a paying caller
+over an outage they cannot see. Nothing in the app writes a schedule yet:
+`pnpm --filter ./backend schedule:set` is the deliberate manual step until
+`/govern/channels` is real.
+
+What is still missing behind it: no named resources. `resourceId` comes back
+null rather than invented — "room 4", "chair 2", "Dr. Patel" is a bigger
+schema than a per-slot count, and a half-built version would let the employee
+promise a specific table it cannot hold. One `durationMinutes` covers every
+booking a tenant takes, so a practice with 15-minute consultations and
+90-minute procedures needs the resource model before it can be described
+honestly.
+
+**A booking keeps the name it was taken under, permanently.**
+`records.party_name` is written at creation and never rewritten, and the
+frontend renders *that* (`record.partyName`), falling back to the directory
+only where the record never carried a name. The two are usually the same
+person; where they disagree the record wins. One phone can belong to a
+household, so a second caller from it renames the *party* — their name is
+`ai_inferred`, and the newest transcription wins until a human settles it —
+while every booking already made keeps whoever made it. Rendering
+`party.displayName` on a booking row is the bug this replaced: it made
+Ahmed's Thursday appointment silently become Asha's the moment she rang from
+the same phone.
+
+**Spend is metered, and the cap actually bites**
+(`backend/src/modules/usage`, `call_usage` table, `workspaces.budget_month_minor`
+/ `at_cap`). `/govern/usage` reads a real tenant's own calls through
+`lib/domains/real-usage.ts`; Northgate keeps its fixture. The distinction this
+module exists to hold, and the one to keep straight before changing anything
+in it:
+
+- **Units are measured.** Connected seconds come off the call; token counts
+  come from the model provider's own usage report (`stream_options.include_usage`
+  on the OpenAI-compatible path, `response.usage` on Anthropic's).
+- **Money is arithmetic.** Those units times rates someone typed into `.env`
+  (`USAGE_RATE_*`). Twilio invoices the telephony and the model provider
+  invoices the tokens, and **neither invoice is readable from inside this
+  backend.** Nothing here is a bill.
+
+So `UsageSnapshot.meter` carries the derivation — minutes, tokens, rates — up
+to the screen, which renders the working rather than asserting a total. A null
+meter means "stated, not measured", which is exactly what the Northgate fixture
+is. Don't collapse the two, and don't let a metered figure be described
+anywhere as an invoice or an amount that will be charged.
+
+The cap is enforced, not merely stored: `shouldAnswerCall()` runs on every
+inbound call and a workspace that chose *stop answering* and has reached its
+budget does not get an AI employee on the line. It fails open — a metering
+outage must never take a business's phone line down. **`voicemail` is refused
+rather than saved**, because there is no voicemail box, and the option renders
+unselectable *with its reason* rather than being hidden — §3.11's hard-block
+rule, now also carried by `ChoiceCards`' `unavailableReason`. Two undercounts
+are known and deliberate: a barged-in turn's tokens (no provider reports usage
+on a cancelled request) and calls closed by the stale sweep (which never
+connected). Both err low. See `backend/README.md` § Usage and the spend cap.
 
 The boundary rule 13 draws is worth stating precisely: the call itself is
 real, and now so is its record — every turn is persisted to Postgres through
 `backend/src/modules/conversations` (`Conversation`, `CallSession`,
-`ConversationMessage`) as it happens, not reconstructed afterwards. The
-in-memory Map keyed by CallSid still exists, but only as the model's working
-context for the live call; Postgres holds the durable transcript. What's
-still missing is everything downstream of the transcript — no calendar,
-knowledge base, or customer records behind it, so the employee can promise a
-follow-up, not take an action; no live control handoff, grounding citations,
-or procedure run, because none of that machinery exists for a real call yet.
-See `backend/README.md` § Twilio inbound speech test and § AI receptionist.
+`ConversationMessage`) as it happens, not reconstructed afterwards. Neither
+Twilio's nor ElevenLabs' own history is ever read back to rebuild a
+transcript. The in-memory session keyed by CallSid still exists, but only as
+the model's working context for the live call; Postgres holds the durable
+transcript. What's still missing is everything downstream of the transcript —
+no calendar, knowledge base, or customer records behind it, so the employee
+can promise a follow-up, not take an action; no live control handoff,
+grounding citations, or procedure run, because none of that machinery exists
+for a real call yet. See `backend/README.md` § Twilio inbound speech test,
+§ AI receptionist and § Realtime voice.
 
 Auth and onboarding routes are not in `screen-registry.ts`: that registry is
 specifically the shell's *navigable* surface inventory, and these routes
@@ -300,18 +456,42 @@ exist before a shell does.
 `built` and which still render a `PlannedSurface` placeholder — read it rather
 than trusting a prose list here to stay current.
 
-**The customer directory** (`/customers`, `components/screens/party-directory.tsx`)
-is built: a master-detail directory titled from the lexicon (Patients, Guests,
-Clients), whose job is the one in the registry — confirming or correcting what
-the AI believes about a person. Facts are grouped and tinted by provenance
-rather than by field, consent is stated as the behaviour it causes ("playback
-is blocked for everyone") rather than as a flag, and a call/record history is
-interleaved from `listConversations({ partyId })` and `listRecords({ partyId })`.
-It is mock-backed per rule 13, with one deliberate exception: `mock.ts` keeps a
-session-lived copy of the parties so `confirmPartyFact` / `correctPartyFact`
-actually change the record. A screen whose primary action does nothing would be
-a fake button, not a mock — but nothing persists past a reload, and no backend
-module is implied.
+**The customer directory is real too** (`/customers`,
+`components/screens/party-directory.tsx`; `backend/src/modules/parties`,
+`parties` + `party_facts` tables). A master-detail directory titled from the
+lexicon (Patients, Guests, Clients), whose job is the one in the registry —
+confirming or correcting what the AI believes about a person. Facts are
+grouped and tinted by provenance rather than by field, consent is stated as
+the behaviour it causes ("playback is blocked for everyone") rather than as a
+flag, and a call/record history is interleaved from
+`listConversations({ partyId })` and `listRecords({ partyId })` — both of
+which now return real rows, because `conversations.party_id` and
+`records.party_id` are real columns the voice pipeline fills in.
+`lib/domains/real-parties.ts` is the adapter, and Northgate keeps its own
+patients per rule 12.
+
+Three things decide how honest this screen is:
+
+- **Identity is the caller's number, and nothing else.** A withheld number
+  produces *no* directory record — a row we could not recognise on the next
+  call is not a customer record, it is a duplicate waiting to happen. The
+  booking such a caller makes still carries the name and number they gave, on
+  `records`, and `partyId` comes back null rather than invented.
+- **A human decision outranks a transcription, permanently.** The one fact a
+  call produces is the caller's name, and it lands as `ai_inferred` because it
+  came through speech recognition. Once somebody confirms or corrects it, a
+  later call mishearing it must never overwrite them — `noteName()` in
+  `party.service.ts` is where that is enforced.
+- **Consent is deliberately blank.** Nothing records calls and nothing asks
+  about marketing, so both answers are `unknown`, which the screen already
+  words as "never asked, treated as declined until it is". A consent column
+  nothing writes would make an unasked question look like an answered one.
+
+What is still missing behind it: no imported facts (nothing connects to a
+practice-management system), no identifier verification or hashing
+(`database.md`'s `customer_identifiers`), no staff notes, and no merge — two
+numbers belonging to one person stay two records until something real can
+decide they are the same person.
 
 **Conversations** (`/conversations`, `/conversations/[id]`,
 `components/screens/conversations-list.tsx` +
@@ -361,6 +541,80 @@ Three things about it are worth knowing before changing it:
 
 Nothing on either screen writes. Authority changes land in a draft and go live
 through Releases, which both screens link to and say so.
+
+**People & roles** (`/govern/people`,
+`components/screens/people-roles.tsx`) is built, and it is the screen that
+makes rule 6 legible for humans rather than AI employees: **a role is a
+summary, a capability is the fact.** `lib/domain/people.ts` owns the
+capability catalogue, the four presets, and the copy for all three — the label,
+the one-line purpose and the granted set are one authored unit, so a preset
+cannot quietly change what it grants without changing what it is said to be.
+That is why role copy lives there rather than in `labels.ts`.
+
+Four things about it are worth knowing before changing it:
+
+- **The rota comes before the list of people.** A workspace with immaculate
+  roles and nobody rostered at 19:40 is broken in a way a permissions grid
+  never shows. `resolveCover()` derives who answers *and for how long* from the
+  rota rather than from `User.onCall`, which is only a badge; `hasCoverageGap()`
+  is what surfaces "an escalation after 18:42 reaches nobody".
+- **Where the badge and the grant disagree, the disagreement is the finding.**
+  `roleDrift()` compares a person's actual `capabilities` against their
+  preset, and `escalationGaps()` asks the sharper question — is the person
+  rostered to take calls actually granted `conversation.takeover`? A row
+  reading "Operator" beside "backup" implies they can pick up tonight; only
+  the grant knows.
+- **Two writes, both guarded in `mock.ts` rather than only in the screen.**
+  Assigning a preset replaces the grant entirely (which is what clears drift),
+  and handing over the pager re-points the rota and derives `User.onCall` from
+  it. The service refuses self-demotion and refuses to strip the last owner, so
+  the screen is built against something that says no — when this reaches a real
+  backend the identical checks belong on the server. Session-lived per rule 13.
+- **A role button is disabled when assigning it would change nothing —
+  not when it is the role they already wear.** Someone badged Operator while
+  missing half the set has a live repair on the Operator button, and that
+  repair is exactly what the drift note tells them to press. Assignment arms
+  before it commits, and `presetDelta()` names the consequence in gained and
+  lost capabilities rather than in role names, because the role name is the
+  thing that was already misleading.
+
+**Review is real too** (`backend/src/modules/review`, `review_issues` +
+`review_issue_events`). The screen's premise is that a row is a *cause* and
+not an incident — "you fix the missing answer once, not the forty-three calls
+it affected" — so the table is keyed on a `cause_key` and the forty-third
+occurrence joins the first rather than opening a duplicate. Two things raise
+one: `flag_unresolved`, a tool the employee calls mid-turn when it hits
+something it cannot handle (the counterpart to `create_booking` — one is doing
+something, this is reporting what it could not do), and the outcome code a
+call ends on. `lib/domains/real-review.ts` maps them onto the same
+`ReviewIssue` the Northgate fixtures use, so `/review` fills with a real
+tenant's own dead ends and Northgate keeps its own.
+
+Four decisions in it are worth knowing before changing anything:
+
+- **The model raises the flag, not a phrase match over the transcript.** Only
+  the model knows whether "I'll have a colleague ring you back" was a real
+  dead end or a polite way of closing a question it had already answered. A
+  matcher files both, and a queue full of false causes is one nobody reads.
+- **Flagging is silent.** The tool's reply tells the model in as many words to
+  say nothing about it and carry on helping. "I've logged that for the
+  business" is not a service, and a test asserts that instruction is still
+  there.
+- **Severity is derived, never stored**, from the cause and how many calls it
+  has touched — a column would leave a cause filed "low" on its first call
+  still reading "low" on its hundredth.
+- **`abandoned` is deliberately not a cause.** That is the stale-call sweep
+  closing a row whose media socket never arrived: someone ringing off while it
+  rang, which is not a failure of anything the employee did.
+
+What it deliberately never raises is the other six `IssueCause` values —
+`conflicting_knowledge` and `stale_knowledge` need a knowledge base for
+sources to disagree, the two procedure causes need procedures, and the two
+autonomy causes need an authority matrix. `proposedFix` is null on every real
+cause for the same reason: drafting the words an employee should say instead
+means knowing the business's actual answer, and nothing here knows it. The
+issue detail already says "someone has to decide what the AI should say or do
+instead", which is exactly true. See `backend/README.md` § Review.
 
 Next up is the rest of the first vertical journey per arch §13 Phase 5: AI
 employee configuration → knowledge → procedure → voice → simulation →

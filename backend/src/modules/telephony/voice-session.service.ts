@@ -1,7 +1,21 @@
 import type { Prisma } from "@prisma/client";
 import { env } from "@/config/env.js";
-import { buildSystemPrompt, type ResolvedEmployee } from "@/modules/telephony/ai-receptionist.js";
-import { streamReply, type Turn } from "@/modules/telephony/llm.js";
+import { buildSystemPrompt, END_CALL_MARKER, type ResolvedEmployee } from "@/modules/telephony/ai-receptionist.js";
+import {
+  addTokenUsage,
+  MarkerStripper,
+  NO_TOKEN_USAGE,
+  streamReply,
+  type TokenUsage,
+  type ToolRunner,
+  type Turn,
+} from "@/modules/telephony/llm.js";
+import { bookingRunner, bookingTools } from "@/modules/telephony/booking-tool.js";
+import {
+  ESCALATION_TOOL_NAME,
+  escalationRunner,
+  escalationTool,
+} from "@/modules/telephony/escalation-tool.js";
 import { TtsChunker } from "@/modules/telephony/tts-chunker.js";
 import { endCall, recordTurn } from "@/modules/conversations/conversation.service.js";
 
@@ -64,6 +78,28 @@ export type VoiceSession = {
    */
   writes: Promise<void>;
   latencies: number[];
+  /**
+   * Tokens this call has burned, summed as each turn's stream ends.
+   *
+   * Accumulated here rather than written per turn because the unit anybody
+   * bills or budgets is a call, and a table with a row per turn would be a
+   * hundred writes during the one part of this system that is latency-bound.
+   *
+   * One known undercount, stated rather than papered over: a turn the caller
+   * barges in on is aborted mid-stream, so its usage chunk never arrives and
+   * its tokens go uncounted even though the provider generated — and charges
+   * for — them. Closing that gap means the provider reporting usage on a
+   * cancelled request, which none of them do. Undercounting an interrupted
+   * turn is the safe direction of the two: the meter reads low, not high.
+   */
+  tokens: TokenUsage;
+  /**
+   * Set when this side decides the call is over, so the socket closing is
+   * recorded as the ending it actually was rather than as a caller hang-up.
+   */
+  endingReason: string | null;
+  /** What the employee is allowed to actually do, bound to this tenant. */
+  tools: NonNullable<Parameters<typeof streamReply>[2]>["tools"];
 };
 
 const sessions = new Map<string, VoiceSession>();
@@ -81,6 +117,11 @@ export function activeVoiceSessionCount(): number {
   return sessions.size;
 }
 
+/** CallSids with a live relay session — the calls a stale sweep must not touch. */
+export function liveVoiceCallSids(): string[] {
+  return [...sessions.keys()];
+}
+
 export type OpenVoiceSessionInput = {
   callSid: string;
   workspaceId: string;
@@ -88,7 +129,23 @@ export type OpenVoiceSessionInput = {
   conversationId: string | null;
   employee: ResolvedEmployee;
   transport: VoiceSessionTransport;
+  /** The caller's number, recorded against anything the employee books. */
+  callerNumber?: string | null;
 };
+
+/**
+ * Routes a tool call to the runner that owns it.
+ *
+ * Each runner is bound to this call's tenant at open time, so nothing the
+ * model writes in its arguments can redirect a booking or a flag into another
+ * workspace. The booking runner owns four names now — creating, finding,
+ * moving and cancelling — and already answers an unknown one with something
+ * the model can act on, so it stays the fallback.
+ */
+function dispatchTool(runners: { booking: ToolRunner; escalation: ToolRunner }): ToolRunner {
+  return (name, args) =>
+    name === ESCALATION_TOOL_NAME ? runners.escalation(name, args) : runners.booking(name, args);
+}
 
 export function openVoiceSession(input: OpenVoiceSessionInput): VoiceSession {
   // A reconnect for the same CallSid replaces the old session rather than
@@ -111,6 +168,27 @@ export function openVoiceSession(input: OpenVoiceSessionInput): VoiceSession {
     closed: false,
     writes: Promise.resolve(),
     latencies: [],
+    tokens: NO_TOKEN_USAGE,
+    endingReason: null,
+    // Bound to this call's tenant at open time, so nothing the model says can
+    // redirect a write into another workspace.
+    tools: {
+      definitions: [...bookingTools, escalationTool],
+      run: dispatchTool({
+        booking: bookingRunner({
+          workspaceId: input.workspaceId,
+          aiEmployeeId: input.employeeId,
+          conversationId: input.conversationId,
+          callerNumber: input.callerNumber ?? null,
+          timezone: input.employee.timezone,
+        }),
+        escalation: escalationRunner({
+          workspaceId: input.workspaceId,
+          aiEmployeeId: input.employeeId,
+          conversationId: input.conversationId,
+        }),
+      }),
+    },
   };
 
   sessions.set(input.callSid, session);
@@ -178,13 +256,21 @@ export function handleInterrupt(session: VoiceSession, utteranceUntilInterrupt: 
 /** Streams one reply. Never throws — a phone call cannot show a stack trace. */
 async function runTurn(session: VoiceSession, turn: ActiveTurn): Promise<void> {
   const chunker = new TtsChunker();
+  // The employee ends the call by writing a marker the caller must never hear.
+  const marker = new MarkerStripper(END_CALL_MARKER);
   logVoice(session, `Groq generation started (turn ${turn.id})`);
 
   try {
-    for await (const chunk of streamReply(session.systemPrompt, session.turns, turn.abort.signal)) {
+    for await (const chunk of streamReply(session.systemPrompt, session.turns, {
+      signal: turn.abort.signal,
+      tools: session.tools,
+    })) {
       if (!isCurrent(session, turn)) return;
 
       if (chunk.kind === "end") {
+        // Counted before the refusal branch returns: a refused turn still ran
+        // through the model and is still billed by whoever ran it.
+        session.tokens = addTokenUsage(session.tokens, chunk.usage ?? NO_TOKEN_USAGE);
         if (chunk.reason === "refusal") {
           finishTurn(session, turn, "Sorry, I can't help with that one. Is there something else I can do?");
           return;
@@ -197,7 +283,10 @@ async function runTurn(session: VoiceSession, turn: ActiveTurn): Promise<void> {
         logVoice(session, `first LLM token (turn ${turn.id}, ${turn.firstTokenAt - turn.startedAt}ms)`);
       }
 
-      for (const frame of chunker.push(chunk.text)) {
+      const speakable = marker.feed(chunk.text);
+      if (speakable.length === 0) continue;
+
+      for (const frame of chunker.push(speakable)) {
         if (!emit(session, turn, frame)) return;
       }
     }
@@ -210,6 +299,13 @@ async function runTurn(session: VoiceSession, turn: ActiveTurn): Promise<void> {
 
   if (!isCurrent(session, turn)) return;
 
+  const tail = marker.flush();
+  if (tail.length > 0) {
+    for (const frame of chunker.push(tail)) {
+      if (!emit(session, turn, frame)) return;
+    }
+  }
+
   for (const frame of chunker.flush()) {
     if (!emit(session, turn, frame)) return;
   }
@@ -220,6 +316,66 @@ async function runTurn(session: VoiceSession, turn: ActiveTurn): Promise<void> {
   }
 
   finishTurn(session, turn, null);
+
+  if (marker.triggered) {
+    // The model proposes the end of a call; this decides it.
+    if (readsAsFarewell(turn.spoken)) await hangUp(session);
+    else logVoice(session, "ignored the end-call marker — the reply is still asking the caller something");
+  }
+}
+
+/**
+ * Whether a reply is actually a goodbye, or a marker written by mistake.
+ *
+ * `END_CALL_MARKER` is the model's opinion that the conversation is over, and
+ * a smaller model sometimes forms that opinion at the end of a reply that has
+ * just asked the caller a question — usually because it wrote out the whole
+ * rest of the conversation in one turn, both sides included, and signed off at
+ * the end of its own script. Observed on `openai/gpt-oss-120b`: a caller who
+ * had given nothing but their name was asked for a date, a time, and a
+ * confirmation in a single breath, and then hung up on.
+ *
+ * Honouring the marker there cuts a caller off mid-booking, which is precisely
+ * the failure `END_CALL_MARKER`'s own comment calls far worse than a few
+ * seconds of silence. A farewell does not end by asking for something, so the
+ * last words the caller actually heard get the final say over the marker.
+ *
+ * Deliberately not a farewell-phrase match — that is the fragile test the
+ * marker exists to avoid. This only rejects a self-contradiction.
+ */
+function readsAsFarewell(spoken: string): boolean {
+  return !/\?["'’”)\]]*$/.test(spoken.trim());
+}
+
+/**
+ * Ends the call from this side, once the farewell has been handed over in full.
+ *
+ * The delay exists because Twilio's docs do not say whether `{"type":"end"}`
+ * lets pending speech finish or cuts it off, and the difference is the caller
+ * hearing "Have a lovely day" or "Have a lovely—". Default 0: measure it on a
+ * real call and set `VOICE_RELAY_HANGUP_DELAY_MS` to whatever that shows,
+ * rather than shipping a guessed number that hides the answer.
+ */
+async function hangUp(session: VoiceSession): Promise<void> {
+  if (session.closed) return;
+  session.endingReason = "completed";
+  logVoice(session, `employee ended the call (drain ${env.VOICE_RELAY_HANGUP_DELAY_MS}ms)`);
+
+  if (env.VOICE_RELAY_HANGUP_DELAY_MS > 0) {
+    await new Promise((resolve) => setTimeout(resolve, env.VOICE_RELAY_HANGUP_DELAY_MS));
+  }
+  // The caller may have started talking during the drain, which un-ends the
+  // call — they clearly were not finished after all.
+  if (session.closed || session.current !== null) {
+    session.endingReason = null;
+    return;
+  }
+
+  session.transport.end("completed");
+  // Finalised here rather than waiting for Twilio to drop the socket. The
+  // `end` frame is already queued on the socket, and depending on the peer to
+  // close would leave the session live indefinitely if it never did.
+  await closeVoiceSession(session.callSid, "completed");
 }
 
 /**
@@ -324,9 +480,12 @@ function isCurrent(session: VoiceSession, turn: ActiveTurn): boolean {
 }
 
 function speakAndEnd(session: VoiceSession, line: string, outcome: string): void {
+  session.endingReason = outcome;
   session.transport.sendText(line, false);
   session.transport.sendText("", true);
   session.transport.end(outcome);
+  // Same reasoning as `hangUp`: do not depend on the peer to close.
+  void closeVoiceSession(session.callSid, outcome);
 }
 
 /**
@@ -371,11 +530,14 @@ export async function closeVoiceSession(callSid: string, outcomeCode = "complete
   const session = sessions.get(callSid);
   if (!session) return;
 
+  // A socket closing after we asked Twilio to hang up is not a caller hang-up.
+  const outcome = session.endingReason ?? outcomeCode;
+
   sessions.delete(callSid);
   session.closed = true;
   discardActiveTurn(session);
 
-  logVoice(session, `call ended (${outcomeCode}, ${Math.round((Date.now() - session.startedAt) / 1000)}s)`);
+  logVoice(session, `call ended (${outcome}, ${Math.round((Date.now() - session.startedAt) / 1000)}s)`);
 
   const pending = session.writes;
   session.turns.length = 0;
@@ -384,19 +546,24 @@ export async function closeVoiceSession(callSid: string, outcomeCode = "complete
 
   if (!session.conversationId) return;
   try {
-    await endCall(session.conversationId, outcomeCode, {
-      transport: "conversation_relay",
-      ttsProvider: env.TWILIO_TTS_PROVIDER,
-      turns: session.turnCount,
-      ...(session.latencies.length > 0
-        ? {
-            firstTokenMsAvg: Math.round(
-              session.latencies.reduce((sum, value) => sum + value, 0) / session.latencies.length,
-            ),
-            firstTokenMsMax: Math.max(...session.latencies),
-          }
-        : {}),
-    });
+    await endCall(
+      session.conversationId,
+      outcome,
+      {
+        transport: "conversation_relay",
+        ttsProvider: env.TWILIO_TTS_PROVIDER,
+        turns: session.turnCount,
+        ...(session.latencies.length > 0
+          ? {
+              firstTokenMsAvg: Math.round(
+                session.latencies.reduce((sum, value) => sum + value, 0) / session.latencies.length,
+              ),
+              firstTokenMsMax: Math.max(...session.latencies),
+            }
+          : {}),
+      },
+      session.tokens,
+    );
   } catch (error) {
     console.error("[VOICE] could not finalise call:", error instanceof Error ? error.message : error);
   }

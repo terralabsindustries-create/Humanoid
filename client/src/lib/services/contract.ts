@@ -37,6 +37,7 @@ import type {
   Release,
   Resource,
   RetentionPolicy,
+  IssueStatus,
   ReviewIssue,
   RolePreset,
   Scenario,
@@ -419,4 +420,13 @@ export interface HumanoidService {
 
   // GET /v1/review/issues/:id
   getReviewIssue(id: string): Promise<ReviewIssue | null>;
+  /**
+   * PATCH /v1/review/issues/:id  { status }  → the updated cause
+   *
+   * Triage, not repair: this records a judgement about the cause and changes
+   * nothing about what the AI employee says or does. The change that stops a
+   * cause recurring is made in Build, against a draft that has to simulate
+   * green before a customer meets it.
+   */
+  updateReviewIssueStatus(id: string, status: IssueStatus): Promise<ReviewIssue>;
 }

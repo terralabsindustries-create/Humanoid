@@ -23,7 +23,8 @@ import {
   dayHeading,
   dayKey,
   now,
-  relative,
+  
+  relativeAgo,
 } from "@/lib/utils/time";
 import { lower, withArticle } from "@/lib/lexicon";
 import type {
@@ -435,6 +436,29 @@ function Tabs({
   );
 }
 
+/**
+ * Whose booking this is — the name it was taken under, not whoever the
+ * directory currently calls that phone number.
+ *
+ * The two are usually the same person and usually agree. Where they do not,
+ * the record wins: a second caller ringing from a shared phone renames the
+ * party, and a receptionist correcting a misheard name renames it again, and
+ * neither of those is an instruction to reassign a booking that was already
+ * made. Falls back to the directory only where the record carried no name of
+ * its own, which is every Northgate fixture.
+ */
+function recordName(
+  record: DomainRecord,
+  party: Party | undefined,
+  partyTerm: string,
+): string {
+  return (
+    record.partyName ??
+    party?.displayName ??
+    `Unidentified ${lower(partyTerm)}`
+  );
+}
+
 function RecordRow({
   record,
   party,
@@ -490,7 +514,7 @@ function RecordRow({
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className="text-sm font-medium text-ink">
-            {party?.displayName ?? `Unidentified ${lower(lexicon.party.one)}`}
+            {recordName(record, party, lexicon.party.one)}
           </span>
           <RecordStatus status={record.status} />
         </span>
@@ -553,7 +577,7 @@ function RecordDetail({
           {recordTypeLabel(record.typeId)}
         </p>
         <h2 className="mt-1 font-display text-lg text-ink">
-          {party?.displayName ?? `Unidentified ${lower(lexicon.party.one)}`}
+          {recordName(record, party, lexicon.party.one)}
         </h2>
         <div className="mt-1.5">
           <RecordStatusInline status={record.status} />
@@ -602,7 +626,7 @@ function Provenance({ record }: { record: DomainRecord }) {
         </p>
         <p className="mt-1 text-xs text-muted">
           Imported from the system you already had. Added{" "}
-          {relative(record.createdAt)} ago.
+          {relativeAgo(record.createdAt)}.
         </p>
       </div>
     );
@@ -617,7 +641,7 @@ function Provenance({ record }: { record: DomainRecord }) {
         Created on {withArticle(lexicon.call.one)}
       </p>
       <p className="mt-1 text-xs text-muted">
-        Raised {relative(record.createdAt)} ago
+        Raised {relativeAgo(record.createdAt)}
         {conversation?.intent ? ` — ${lower(conversation.intent)}` : ""}.
       </p>
 

@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils/cn";
 import { Status, StatusPill } from "@/components/primitives/status";
 import { GATE_STATUS_LABEL, GATE_STATUS_TONE } from "@/lib/domain/labels";
 import { retentionFor, retentionLabel } from "@/lib/domain/compliance";
-import { relative } from "@/lib/utils/time";
+import { relativeAgo } from "@/lib/utils/time";
 import type {
   ComplianceGate,
   ComplianceGateStatus,
@@ -158,7 +158,7 @@ export function ComplianceGateRow({
             </span>
             <span aria-hidden>·</span>
             {gate.lastReviewedAt ? (
-              <span>reviewed {relative(gate.lastReviewedAt)} ago</span>
+              <span>reviewed {relativeAgo(gate.lastReviewedAt)}</span>
             ) : (
               /* Never reviewed is a finding in itself, so it is stated as one
                  rather than shown as an empty slot. */

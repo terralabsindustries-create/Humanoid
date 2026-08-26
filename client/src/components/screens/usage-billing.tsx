@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowUpRight, Gauge, PhoneCall, Receipt, Wallet } from "lucide-react";
+import { ArrowUpRight, Gauge, PhoneCall, Receipt, Ruler, Wallet } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { qk, service } from "@/lib/services";
 import { useWorkspace } from "@/components/providers/app-providers";
@@ -11,7 +11,7 @@ import { hasCapability } from "@/lib/navigation";
 import { Button } from "@/components/primitives/button";
 import { EmptyState, ErrorState } from "@/components/primitives/empty-state";
 import { LoadingAnnouncement, Skeleton } from "@/components/primitives/skeleton";
-import { BudgetEditor, BudgetSummary } from "@/components/domain/budget-editor";
+import { BudgetEditor, BudgetSummary, CAP_ICON } from "@/components/domain/budget-editor";
 import {
   PACE_VERDICT_LABEL,
   PACE_VERDICT_TONE,
@@ -24,7 +24,7 @@ import {
   type PaceVerdict,
 } from "@/lib/domain/usage";
 import { money, now, percent } from "@/lib/utils/time";
-import type { UsageSnapshot } from "@/lib/domain/types";
+import type { UsageMeter, UsageSnapshot } from "@/lib/domain/types";
 
 /**
  * Usage & billing.
@@ -41,6 +41,14 @@ import type { UsageSnapshot } from "@/lib/domain/types";
  * one-line indicator is the comparison a glance cannot make — spend against
  * how far the month has actually got — and the one control that is genuinely
  * missing from the shell: changing the budget and the behaviour at the cap.
+ *
+ * Where the money comes from is rendered, not assumed. A real tenant's spend
+ * is metered — connected minutes and model tokens off its own calls, priced at
+ * rates its operator configured — and `snapshot.meter` carries that derivation
+ * so `HowThisIsMetered` can show the working. Northgate leaves `meter` null and
+ * states a total the way a demo may. This is the one screen where the
+ * difference between a measured number and a written-down one is the whole
+ * subject, so the two are never allowed to look alike.
  */
 export function UsageBilling() {
   const { user: viewer, workspace, loading: viewerLoading } = useWorkspace();
@@ -102,6 +110,10 @@ export function UsageBilling() {
         <UsageSkeleton />
       ) : (
         <>
+          {snapshot.meter?.capReached && (
+            <CapReached snapshot={snapshot} currency={currency} />
+          )}
+
           <PaceSection snapshot={snapshot} period={period} currency={currency} />
 
           <section className="mt-10" aria-labelledby="budget-heading">
@@ -123,6 +135,7 @@ export function UsageBilling() {
                   budgetMonth={snapshot.budgetMonth}
                   atCap={snapshot.atCap}
                   currency={currency}
+                  blocked={snapshot.capBlocked}
                   pending={save.isPending}
                   error={
                     save.isError
@@ -154,7 +167,11 @@ export function UsageBilling() {
             </div>
           </section>
 
-          <Footnote />
+          {snapshot.meter && (
+            <HowThisIsMetered meter={snapshot.meter} currency={currency} />
+          )}
+
+          <Footnote metered={snapshot.meter !== null} />
         </>
       )}
     </Page>
@@ -355,7 +372,151 @@ function PaceSection({
   );
 }
 
-function Footnote() {
+/**
+ * Spend has reached the budget, and something is happening because of it.
+ *
+ * This is the moment the whole screen exists for, so it is stated at the top
+ * rather than left to be inferred from a bar that has run out of room. What it
+ * says depends on `atCap`, because "you have reached your budget" means
+ * something completely different if the answer is "and calls carry on as
+ * normal" versus "and the line has stopped answering" — and the second is a
+ * business outage its operator needs to recognise in one read.
+ */
+function CapReached({
+  snapshot,
+  currency,
+}: {
+  snapshot: UsageSnapshot;
+  currency: string;
+}) {
+  const stopped = snapshot.atCap !== "notify";
+  // The icon of the behaviour that was actually chosen, so this banner and the
+  // control below it cannot appear to describe two different policies.
+  const Icon = CAP_ICON[snapshot.atCap];
+
+  return (
+    <div
+      role="status"
+      className={cn(
+        "mt-6 flex items-start gap-2.5 rounded-panel border p-3.5",
+        stopped ? "border-danger/40 bg-danger-surface" : "border-warning/40 bg-warning-surface",
+      )}
+    >
+      <Icon
+        className={cn("mt-0.5 size-4 shrink-0", stopped ? "text-danger" : "text-warning")}
+        aria-hidden
+      />
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-ink">
+          {stopped
+            ? "The budget is spent and the AI has stopped answering"
+            : "The budget is spent. Calls are still being answered"}
+        </p>
+        <p className="mt-1 text-sm text-muted">
+          {money(snapshot.spendMonth, currency)} of the{" "}
+          {snapshot.budgetMonth !== null && money(snapshot.budgetMonth, currency)} budget has been
+          used this month.{" "}
+          {stopped
+            ? "Callers are hearing that automated calls are unavailable and being asked to try another way. Raising the budget below restores the line immediately."
+            : "That was the choice made here: notify and keep going. Nothing stops until the budget is lowered or the behaviour at the cap is changed."}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The working behind the money.
+ *
+ * A spend figure with no derivation is a number to be believed or not, and on
+ * this screen it would be a number someone might act on — pause a phone line,
+ * argue with an invoice. So the units are shown next to the rates, and the
+ * sentence that matters most is the last one: this is not a bill. Twilio bills
+ * the telephony and the model provider bills the tokens, and neither invoice is
+ * readable from inside this system. Presenting a metered estimate as an invoice
+ * would be exactly the kind of plausible fabrication this codebase refuses
+ * everywhere else.
+ */
+function HowThisIsMetered({
+  meter,
+  currency,
+}: {
+  meter: UsageMeter;
+  currency: string;
+}) {
+  return (
+    <section className="mt-10" aria-labelledby="meter-heading">
+      <h2
+        id="meter-heading"
+        className="font-mono text-2xs tracking-wide text-faint uppercase"
+      >
+        How this figure is arrived at
+      </h2>
+
+      <dl className="mt-3 overflow-hidden rounded-panel border border-line bg-elevated">
+        <MeterRow
+          label="Connected minutes this month"
+          value={`${meter.connectedMinutesMonth.toLocaleString()} min`}
+          detail={`across ${meter.callsMonth.toLocaleString()} ${meter.callsMonth === 1 ? "call" : "calls"}, at ${money(meter.rates.voicePerMinute, currency)} a minute`}
+        />
+        <MeterRow
+          label="Model tokens this month"
+          value={
+            meter.modelTokensMonth === null
+              ? "Not counted"
+              : meter.modelTokensMonth.toLocaleString()
+          }
+          detail={
+            meter.modelTokensMonth === null
+              ? "No call this month reported token counts, so the model half of this figure is missing rather than zero."
+              : `at ${money(meter.rates.modelInputPerMillionTokens, currency)} per million in and ${money(meter.rates.modelOutputPerMillionTokens, currency)} per million out` +
+                (meter.unmeteredCalls > 0
+                  ? ` · ${meter.unmeteredCalls} ${meter.unmeteredCalls === 1 ? "call" : "calls"} went uncounted`
+                  : "")
+          }
+        />
+        <MeterRow
+          label="Calls that reached an outcome"
+          value={meter.resolvedCallsMonth.toLocaleString()}
+          detail="what cost per resolution divides by"
+        />
+      </dl>
+
+      <p className="mt-3 flex items-start gap-1.5 max-w-prose text-xs text-faint">
+        <Ruler className="mt-px size-3 shrink-0" aria-hidden />
+        <span>
+          Minutes and tokens are measured off the calls themselves. The money is
+          those measurements at the rates configured for this workspace — it is
+          not an invoice. Twilio bills the telephony and the model provider
+          bills the tokens, and neither bill is readable from here, so treat
+          this as a close estimate rather than the amount you will be charged.
+        </span>
+      </p>
+    </section>
+  );
+}
+
+function MeterRow({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="border-b border-line px-3.5 py-3 last:border-b-0">
+      <div className="flex items-baseline justify-between gap-3">
+        <dt className="min-w-0 text-sm text-ink">{label}</dt>
+        <dd className="shrink-0 font-mono text-xs tabular text-ink">{value}</dd>
+      </div>
+      <p className="mt-0.5 text-xs text-muted">{detail}</p>
+    </div>
+  );
+}
+
+function Footnote({ metered }: { metered: boolean }) {
   return (
     <p className="mt-10 max-w-prose border-t border-line pt-5 text-sm text-muted">
       Changing the budget or the behaviour at the cap is written to the{" "}
@@ -370,6 +531,14 @@ function Footnote() {
         <ArrowUpRight className="size-3 shrink-0 self-center" aria-hidden />
       </Link>
       , including who made it and what it was before.
+      {metered && (
+        <>
+          {" "}
+          That entry is recorded against this workspace now; the audit surface
+          itself still shows demonstration events rather than reading them back,
+          so it will not appear there yet.
+        </>
+      )}
     </p>
   );
 }
@@ -412,7 +581,13 @@ function Rail({
           <RailRow
             icon={Gauge}
             label="Cost per resolution"
-            value={money(snapshot.costPerResolution, currency)}
+            // An average over no resolutions is not zero — a dash says "not
+            // yet", which is the true answer, where £0.00 would read as free.
+            value={
+              snapshot.meter && snapshot.meter.resolvedCallsMonth === 0
+                ? "—"
+                : money(snapshot.costPerResolution, currency)
+            }
           />
           <RailRow
             icon={PhoneCall}
@@ -425,9 +600,9 @@ function Rail({
       <div className="flex items-start gap-1.5 text-2xs text-faint">
         <Receipt className="mt-px size-3 shrink-0" aria-hidden />
         <span>
-          Figures reset at the start of each calendar month. There is no
-          separate invoice view yet — this snapshot is the billing record
-          until one exists.
+          {snapshot.meter
+            ? "Figures reset at the start of each calendar month, in this workspace's own timezone. They are metered from the calls themselves — see how the figure is arrived at, below — and are not an invoice."
+            : "Figures reset at the start of each calendar month. There is no separate invoice view yet — this snapshot is the billing record until one exists."}
         </span>
       </div>
     </div>

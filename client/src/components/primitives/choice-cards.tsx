@@ -11,6 +11,13 @@ export type ChoiceCardOption = {
   label: string;
   description?: string;
   icon?: LucideIcon;
+  /**
+   * Why this option cannot be chosen here. Set it and the card renders
+   * unselectable with the reason in place of its description — never hidden,
+   * per §3.11: an option removed from a list cannot be asked about, so someone
+   * wondering whether it exists at all gets no answer.
+   */
+  unavailableReason?: string;
 };
 
 /**
@@ -68,29 +75,36 @@ export function ChoiceCards({
       {options.map((option) => {
         const isSelected = selected.has(option.id);
         const Icon = option.icon;
+        const blocked = option.unavailableReason !== undefined;
         return (
           <motion.button
             key={option.id}
             type="button"
             role={multiple ? "checkbox" : "radio"}
             aria-checked={isSelected}
+            // Disabled rather than removed, and still reachable by a screen
+            // reader through the group, so the reason is announced with the
+            // option rather than the option simply not existing.
+            disabled={blocked}
             onClick={() => toggle(option.id)}
-            whileTap={{ scale: 0.98 }}
+            whileTap={blocked ? undefined : { scale: 0.98 }}
             transition={SPRING.press}
             className={cn(
               "group relative flex items-start gap-3 rounded-panel border p-3.5 text-left",
               "transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
               size === "sm" && "p-3",
-              isSelected
-                ? "border-ink bg-accent-surface"
-                : "border-line-strong bg-elevated hover:bg-subtle",
+              blocked
+                ? "cursor-not-allowed border-line bg-subtle/50"
+                : isSelected
+                  ? "border-ink bg-accent-surface"
+                  : "border-line-strong bg-elevated hover:bg-subtle",
             )}
           >
             {Icon && (
               <Icon
                 className={cn(
                   "mt-0.5 size-4 shrink-0",
-                  isSelected ? "text-ink" : "text-faint",
+                  blocked ? "text-faint/60" : isSelected ? "text-ink" : "text-faint",
                 )}
                 aria-hidden
               />
@@ -99,36 +113,50 @@ export function ChoiceCards({
               <span
                 className={cn(
                   "block text-sm font-medium",
-                  isSelected ? "text-ink" : "text-ink/90",
+                  blocked ? "text-muted" : isSelected ? "text-ink" : "text-ink/90",
                 )}
               >
                 {option.label}
               </span>
-              {option.description && (
+              {blocked ? (
                 <span className="mt-0.5 block text-xs text-muted">
-                  {option.description}
+                  {option.unavailableReason}
                 </span>
+              ) : (
+                option.description && (
+                  <span className="mt-0.5 block text-xs text-muted">
+                    {option.description}
+                  </span>
+                )
               )}
             </span>
-            <span
-              className={cn(
-                "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
-                isSelected
-                  ? "border-ink bg-ink"
-                  : "border-line-strong bg-transparent",
-              )}
-              aria-hidden
-            >
-              {isSelected && (
-                <motion.span
-                  initial={{ scale: 0 }}
-                  animate={{ scale: 1 }}
-                  transition={TRANSITION.feedback}
-                >
-                  <Check className="size-2.5 text-app" strokeWidth={3} />
-                </motion.span>
-              )}
-            </span>
+            {blocked ? (
+              // A stated block, not an empty slot where the control was. Text
+              // as well as the muted treatment, per rule 3.
+              <span className="mt-0.5 shrink-0 font-mono text-2xs tracking-wide text-faint uppercase">
+                Not available
+              </span>
+            ) : (
+              <span
+                className={cn(
+                  "mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border",
+                  isSelected
+                    ? "border-ink bg-ink"
+                    : "border-line-strong bg-transparent",
+                )}
+                aria-hidden
+              >
+                {isSelected && (
+                  <motion.span
+                    initial={{ scale: 0 }}
+                    animate={{ scale: 1 }}
+                    transition={TRANSITION.feedback}
+                  >
+                    <Check className="size-2.5 text-app" strokeWidth={3} />
+                  </motion.span>
+                )}
+              </span>
+            )}
           </motion.button>
         );
       })}

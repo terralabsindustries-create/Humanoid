@@ -9,13 +9,15 @@
     "start": "node --env-file=.env dist/server.js",
     "lint": "eslint .",
     "env:check": "bash scripts/check-env.sh",
+    "phone:assign": "tsx --env-file=.env scripts/assign-phone-number.ts",
+    "schedule:set": "tsx --env-file=.env scripts/set-schedule.ts",
     "test": "node --env-file=.env.test node_modules/vitest/vitest.mjs run",
     "test:watch": "node --env-file=.env.test node_modules/vitest/vitest.mjs",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:migrate:deploy": "prisma migrate deploy",
+    "db:generate": "node --env-file=.env node_modules/prisma/build/index.js generate",
+    "db:migrate": "node --env-file=.env node_modules/prisma/build/index.js migrate dev",
+    "db:migrate:deploy": "node --env-file=.env node_modules/prisma/build/index.js migrate deploy",
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "node --env-file=.env node_modules/prisma/build/index.js studio"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",

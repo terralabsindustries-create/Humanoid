@@ -11,7 +11,6 @@ import type {
   AIEmployee,
   AuditEvent,
   BlockerType,
-  Conversation,
   FallbackBehaviour,
   KnowledgeConflict,
   KnowledgeGap,
@@ -22,13 +21,28 @@ import type {
   PerformancePoint,
   Procedure,
   Release,
+  ReviewIssue,
   ScenarioResult,
   Scope,
   SimulationRun,
   UsageSnapshot,
   User,
 } from "@/lib/domain/types";
+import { LIVE_STATUSES } from "@/lib/domain/types";
 import { resolveOnboardedWorkspace } from "@/lib/domains/onboarded-workspace";
+import { listRealRecords } from "@/lib/domains/real-records";
+import { getRealUsage, setRealBudget } from "@/lib/domains/real-usage";
+import {
+  getRealReviewIssue,
+  listRealReviewIssues,
+  updateRealReviewIssueStatus,
+} from "@/lib/domains/real-review";
+import {
+  confirmRealPartyFact,
+  correctRealPartyFact,
+  getRealParty,
+  listRealParties,
+} from "@/lib/domains/real-parties";
 import {
   authoredSource,
   rankConflicts,
@@ -63,12 +77,6 @@ async function respond<T>(value: T, ms = LATENCY.normal): Promise<T> {
   return structuredClone(value);
 }
 
-const LIVE_STATUSES: Conversation["status"][] = [
-  "ringing",
-  "active",
-  "waiting",
-  "wrapping",
-];
 
 function inScope(
   locationId: string,
@@ -161,6 +169,19 @@ async function userOverride() {
  * can be mistaken for persistence.
  */
 const partyState: Party[] = structuredClone(fx.parties);
+
+/**
+ * The second thing this mock accepts writes to, for the same reason as the
+ * first: the Review queue is *organised* by status — four tabs, each with a
+ * count — so a version of it where nothing can move between them would be
+ * four fake buttons rather than a mock. Triage lands in this session-lived
+ * copy; a reload returns to the authored fixture, so nothing here can be
+ * mistaken for persistence.
+ *
+ * A real tenant does not use this at all — its causes are real rows in
+ * Postgres, and `updateReviewIssueStatus` reaches the backend.
+ */
+const issueState: ReviewIssue[] = structuredClone(fx.reviewIssues);
 
 /**
  * The audit log accepts one write, and only from the server side of the
@@ -572,10 +593,15 @@ export const mockService: HumanoidService = {
   },
 
   listParties: async (filters: PartyFilters = {}) => {
-    // Same rule as conversations: a workspace onboarded five minutes ago has
-    // no customer history, and borrowing Northgate's would be a lie the rest
-    // of the shell then has to keep.
-    if (await workspaceOverride()) return respond([], LATENCY.fast);
+    // A real tenant reads the people its own AI employee has actually spoken
+    // to. Borrowing Northgate's patients would be a lie the rest of the shell
+    // then has to keep; before a call could produce a person this returned an
+    // honest empty list, and now there is somebody real in it.
+    const resolved = await resolveOnboardedWorkspace();
+    if (resolved) {
+      const list = await listRealParties(resolved.workspace.id, resolved.location.id, filters);
+      return respond(list, LATENCY.fast);
+    }
 
     let list = partyState;
 
@@ -618,19 +644,57 @@ export const mockService: HumanoidService = {
     return respond(list);
   },
 
-  getParty: (id) => respond(partyState.find((p) => p.id === id) ?? null),
+  getParty: async (id) => {
+    const resolved = await resolveOnboardedWorkspace();
+    if (resolved) {
+      const party = await getRealParty(resolved.workspace.id, resolved.location.id, id);
+      return respond(party, LATENCY.fast);
+    }
+    return respond(partyState.find((p) => p.id === id) ?? null);
+  },
 
-  confirmPartyFact: ({ partyId, label }) =>
-    respond(editFact(partyId, label), LATENCY.fast),
+  // The two writes this contract has that now reach Postgres. For Northgate
+  // they still land in `partyState`, which dies with the tab — see the note
+  // on that constant for why a mock is allowed to accept a write at all.
+  confirmPartyFact: async ({ partyId, label }) => {
+    const resolved = await resolveOnboardedWorkspace();
+    if (resolved) {
+      const party = await confirmRealPartyFact(
+        resolved.workspace.id,
+        resolved.location.id,
+        partyId,
+        label,
+      );
+      return respond(party, LATENCY.fast);
+    }
+    return respond(editFact(partyId, label), LATENCY.fast);
+  },
 
-  correctPartyFact: ({ partyId, label, value }) =>
-    respond(editFact(partyId, label, value), LATENCY.fast),
+  correctPartyFact: async ({ partyId, label, value }) => {
+    const resolved = await resolveOnboardedWorkspace();
+    if (resolved) {
+      const party = await correctRealPartyFact(
+        resolved.workspace.id,
+        resolved.location.id,
+        partyId,
+        label,
+        value,
+      );
+      return respond(party, LATENCY.fast);
+    }
+    return respond(editFact(partyId, label, value), LATENCY.fast);
+  },
 
   listRecords: async (filters: RecordFilters = {}) => {
-    // Same rule as conversations and parties: a workspace onboarded this
-    // morning has an empty diary, and showing it Northgate's would merge two
-    // tenants on the one screen whose whole job is "what did the AI do here".
-    if (await workspaceOverride()) return respond([], LATENCY.fast);
+    // A real tenant reads what its own AI employee actually booked, never
+    // Northgate's diary — the two identities never merge. Before the employee
+    // could take an action this returned an honest empty list; now there is
+    // something real to return.
+    const resolved = await resolveOnboardedWorkspace();
+    if (resolved) {
+      const list = await listRealRecords(resolved.workspace.id, resolved.location.id, filters);
+      return respond(list, LATENCY.fast);
+    }
 
     let list = fx.records.filter(
       (r) =>
@@ -676,14 +740,22 @@ export const mockService: HumanoidService = {
 
   listResources: () => respond(fx.resources, LATENCY.fast),
 
-  listReviewIssues: async () =>
-    (await workspaceOverride())
-      ? respond([])
-      : respond(
-          [...fx.reviewIssues].sort(
-            (a, b) => b.affectedConversationCount - a.affectedConversationCount,
-          ),
-        ),
+  // A real onboarded tenant reads the causes its own employee actually ran
+  // into, from the backend's review module — see `lib/domains/real-review.ts`.
+  // Before anything could detect a cause this returned an honest empty list;
+  // now there is something real to return.
+  listReviewIssues: async () => {
+    const workspace = await workspaceOverride();
+    if (workspace) {
+      return respond(await listRealReviewIssues(workspace.id), LATENCY.fast);
+    }
+
+    return respond(
+      [...issueState].sort(
+        (a, b) => b.affectedConversationCount - a.affectedConversationCount,
+      ),
+    );
+  },
 
   listPendingApprovals: async () =>
     (await workspaceOverride())
@@ -739,14 +811,23 @@ export const mockService: HumanoidService = {
     return respond(procedure, LATENCY.fast);
   },
 
-  getUsage: async () =>
-    respond(
-      (await workspaceOverride())
-        ? { spendToday: 0, spendMonth: 0, budgetMonth: null, atCap: "notify" as const, callsToday: 0, costPerResolution: 0 }
-        : usageState,
-      LATENCY.fast,
-    ),
-  setBudget: ({ budgetMonth, atCap }) => {
+  // A real onboarded tenant's spend is metered off its own calls by the
+  // backend's usage module — see `lib/domains/real-usage.ts`. Until there was
+  // a meter this returned zeros, which was honest but useless; now the number
+  // is real, and arrives with the units and rates it was derived from so the
+  // screen can show its working rather than assert a total.
+  getUsage: async () => {
+    const workspace = await workspaceOverride();
+    if (workspace) return respond(await getRealUsage(workspace.id), LATENCY.fast);
+    return respond(usageState, LATENCY.fast);
+  },
+
+  setBudget: async ({ budgetMonth, atCap }) => {
+    const workspace = await workspaceOverride();
+    if (workspace) {
+      return respond(await setRealBudget(workspace.id, { budgetMonth, atCap }), LATENCY.fast);
+    }
+
     usageState.budgetMonth = budgetMonth;
     usageState.atCap = atCap;
     return respond(usageState, LATENCY.fast);
@@ -825,7 +906,7 @@ export const mockService: HumanoidService = {
       // list is how a briefing ends up recommending something the queue has
       // in fourth place.
       topIssues: rankIssues(
-        fx.reviewIssues.filter((i) => i.status === "open"),
+        issueState.filter((i) => i.status === "open"),
       ).slice(0, 3),
       pendingApprovals: approvals,
       signals: [
@@ -1119,6 +1200,23 @@ export const mockService: HumanoidService = {
     );
   },
 
-  getReviewIssue: (id) =>
-    respond(fx.reviewIssues.find((i) => i.id === id) ?? null),
+  getReviewIssue: async (id) => {
+    const workspace = await workspaceOverride();
+    if (workspace) {
+      return respond(await getRealReviewIssue(workspace.id, id), LATENCY.fast);
+    }
+    return respond(issueState.find((i) => i.id === id) ?? null);
+  },
+
+  updateReviewIssueStatus: async (id, status) => {
+    const workspace = await workspaceOverride();
+    if (workspace) {
+      return respond(await updateRealReviewIssueStatus(workspace.id, id, status), LATENCY.fast);
+    }
+
+    const issue = issueState.find((i) => i.id === id);
+    if (!issue) throw new Error(`No review issue with id ${id}`);
+    issue.status = status;
+    return respond(issue, LATENCY.fast);
+  },
 };

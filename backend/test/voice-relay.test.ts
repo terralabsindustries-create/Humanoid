@@ -28,9 +28,9 @@ vi.mock("@/modules/telephony/llm.js", async (importOriginal) => {
     // to answering agent; without this the route serves <Gather> instead.
     activeProvider: () => "openai",
     activeModel: () => "test-model",
-    streamReply: (_system: string, _turns: unknown, signal?: AbortSignal) => {
+    streamReply: (_system: string, _turns: unknown, options?: { signal?: AbortSignal }) => {
       if (!mocks.script) throw new Error("test did not set a model script");
-      return mocks.script(signal);
+      return mocks.script(options?.signal);
     },
   };
 });
@@ -320,6 +320,85 @@ describe("realtime voice — Twilio ConversationRelay", () => {
     const messages = await transcript();
     expect(messages[1]!.textContent).toContain("Let me check that for you.");
     expect(messages[1]!.textContent).toContain("I'm having trouble accessing that right now.");
+  });
+
+  it("hangs up when the employee signals the call is over, without ever speaking the marker", async () => {
+    mocks.script = scriptOf("You're welcome! ", "Have a lovely day. ", "[[END_CALL]]");
+
+    const relay = await connect(await inboundCall());
+    await relay.setup();
+    relay.send({ type: "prompt", voicePrompt: "That's all, thank you", last: true });
+    await relay.waitForTurnEnd();
+
+    // The farewell is spoken in full; the marker is not spoken at all.
+    expect(relay.spoken()).toBe("You're welcome! Have a lovely day.");
+    expect(relay.spoken()).not.toContain("END_CALL");
+    expect(relay.spoken()).not.toContain("[[");
+
+    await waitFor(() => relay.frames.some((f) => f.type === "end"), "end frame");
+    expect(activeVoiceSessionCount()).toBe(0);
+
+    const messages = await transcript();
+    // The marker is call control, not something the employee said.
+    expect(messages[1]!.textContent).toBe("You're welcome! Have a lovely day.");
+
+    await waitFor(async () => {
+      const c = await prisma.conversation.findFirst({ where: { workspaceId } });
+      return c?.outcomeCode === "completed";
+    }, "recorded as completed, not a caller hang-up");
+  });
+
+  it("never leaks the marker even when it arrives split across deltas", async () => {
+    // The realistic streaming case: "[[END" then "_CALL]]".
+    mocks.script = scriptOf("Goodbye now. ", "[[END", "_CALL", "]]");
+
+    const relay = await connect(await inboundCall());
+    await relay.setup();
+    relay.send({ type: "prompt", voicePrompt: "bye", last: true });
+    await relay.waitForTurnEnd();
+
+    expect(relay.spoken()).toBe("Goodbye now.");
+    expect(relay.spoken()).not.toMatch(/\[\[|END|CALL/);
+    await waitFor(() => relay.frames.some((f) => f.type === "end"), "end frame");
+  });
+
+  it("stays on the line when the employee does not signal an ending", async () => {
+    mocks.script = scriptOf("Sure, what time suits you?");
+
+    const relay = await connect(await inboundCall());
+    await relay.setup();
+    relay.send({ type: "prompt", voicePrompt: "I'd like to book", last: true });
+    await relay.waitForTurnEnd();
+
+    expect(relay.frames.some((f) => f.type === "end")).toBe(false);
+    expect(activeVoiceSessionCount()).toBe(1);
+  });
+
+  it("ignores the marker when the reply is still asking the caller a question", async () => {
+    // Taken verbatim from a real call: the model wrote out the whole rest of
+    // the conversation in one turn, both sides included, and signed off at the
+    // end of its own script — hanging up on a caller who had given nothing but
+    // their name. A farewell does not end by asking for something.
+    mocks.script = scriptOf(
+      "Thank you, Akbar. Which day would you like the appointment?",
+      "And what time would you like?",
+      "[[END_CALL]]",
+    );
+
+    const relay = await connect(await inboundCall());
+    await relay.setup();
+    relay.send({ type: "prompt", voicePrompt: "My name is Akbar Salil", last: true });
+    await relay.waitForTurnEnd();
+
+    expect(relay.spoken()).not.toContain("END_CALL");
+    expect(relay.frames.some((f) => f.type === "end")).toBe(false);
+    expect(activeVoiceSessionCount()).toBe(1);
+
+    // Still answerable: the caller gets to say the thing they were asked for.
+    mocks.script = scriptOf("Booked. Goodbye. ", "[[END_CALL]]");
+    relay.send({ type: "prompt", voicePrompt: "Tuesday at three", last: true });
+    await relay.waitForTurnEnd();
+    await waitFor(() => relay.frames.some((f) => f.type === "end"), "end frame on a real farewell");
   });
 
   it("cleans up the session and finalises the conversation when the caller hangs up", async () => {

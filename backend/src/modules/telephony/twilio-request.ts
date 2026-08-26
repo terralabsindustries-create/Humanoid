@@ -15,7 +15,43 @@ export type TwilioVoicePayload = {
   To?: string;
   SpeechResult?: string;
   Confidence?: string;
+  /** "inbound" | "outbound-api" | "outbound-dial". */
+  Direction?: string;
 };
+
+/**
+ * Which end of the call is the person, and which is us.
+ *
+ * `From` and `To` are not "caller" and "callee" — they are the two ends, and
+ * which one holds the human depends entirely on who dialled. On an inbound
+ * call the human is `From`; on an outbound one Twilio dials *from* the
+ * business number, so the human is `To` and reading `From` gives you your own
+ * Twilio number back.
+ *
+ * That is not hypothetical: it put the AI's own number on a booking, in the
+ * "Phone" field a human being is meant to ring back.
+ */
+export type CallParties = {
+  /** The person on the phone. */
+  human: string | null;
+  /** The business's own number — what a caller dialled, or what we dialled from. */
+  business: string | null;
+  direction: "inbound" | "outbound";
+};
+
+export function callParties(
+  direction: string | undefined,
+  from: string | undefined,
+  to: string | undefined,
+): CallParties {
+  // Twilio spells it "outbound-api" and "outbound-dial"; ConversationRelay's
+  // setup message just says "outbound".
+  const outbound = (direction ?? "").toLowerCase().startsWith("outbound");
+
+  return outbound
+    ? { human: to ?? null, business: from ?? null, direction: "outbound" }
+    : { human: from ?? null, business: to ?? null, direction: "inbound" };
+}
 
 /**
  * PUBLIC_BASE_URL wins over the request's own host because behind a tunnel

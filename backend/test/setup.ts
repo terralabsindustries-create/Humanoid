@@ -42,6 +42,15 @@ beforeAll(() => {
  */
 beforeEach(async () => {
   await prisma.$transaction([
+    prisma.reviewIssueEvent.deleteMany(),
+    prisma.reviewIssue.deleteMany(),
+    prisma.callUsage.deleteMany(),
+    prisma.record.deleteMany(),
+    prisma.businessHours.deleteMany(),
+    prisma.scheduleException.deleteMany(),
+    prisma.bookingPolicy.deleteMany(),
+    prisma.partyFact.deleteMany(),
+    prisma.party.deleteMany(),
     prisma.auditEvent.deleteMany(),
     prisma.onboardingAnswer.deleteMany(),
     prisma.onboardingSession.deleteMany(),

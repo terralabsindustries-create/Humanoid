@@ -18,7 +18,7 @@ import { EmptyState, ErrorState } from "@/components/primitives/empty-state";
 import { Skeleton, SkeletonText } from "@/components/primitives/skeleton";
 import { CAUSE_LABEL, SEVERITY_TONE } from "@/lib/domain/labels";
 import { LiveConversationRow } from "@/components/domain/live-conversation-row";
-import { clockTime, now, relative } from "@/lib/utils/time";
+import { clockTime, now,  relativeAgo } from "@/lib/utils/time";
 import { lower } from "@/lib/lexicon";
 import type { Briefing } from "@/lib/services";
 
@@ -211,7 +211,7 @@ function RightNow({ briefing }: { briefing: Briefing }) {
         <p className="text-md text-muted">
           Nothing live. The last call ended{" "}
           <span className="text-ink">
-            {relative(briefing.generatedAt)} ago
+            {relativeAgo(briefing.generatedAt)}
           </span>
           .
         </p>
@@ -425,7 +425,7 @@ function NeedsYou({ briefing }: { briefing: Briefing }) {
               <p className="mt-1 text-xs text-muted">
                 {/* Blast radius, not instance count — you fix the cause once. */}
                 Affecting {issue.affectedConversationCount} conversations · last
-                seen {relative(issue.lastSeenAt)} ago
+                seen {relativeAgo(issue.lastSeenAt)}
               </p>
             </div>
             <ArrowUpRight

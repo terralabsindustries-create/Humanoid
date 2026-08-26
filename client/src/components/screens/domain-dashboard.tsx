@@ -2,11 +2,14 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { TriangleAlert, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { useOnboarding } from "@/lib/store/onboarding";
 import { getDomainPack } from "@/lib/domains/registry";
-import { buildActivityFeed, formatMetricValue } from "@/lib/domains/dashboard-mock";
+import { formatMetricValue } from "@/lib/domains/dashboard-mock";
+import { buildActivityFromConversations } from "@/lib/domains/dashboard-activity";
+import { qk, service } from "@/lib/services";
 import { STANDARD_AI_QUESTION_IDS } from "@/lib/domains/shared";
 import { useLexicon } from "@/components/providers/app-providers";
 import { lower } from "@/lib/lexicon";
@@ -25,6 +28,18 @@ import { EmptyState } from "@/components/primitives/empty-state";
  * changes.
  */
 export function DomainDashboard() {
+  /**
+   * The activity band is the tenant's own calls, not authored samples. Polled
+   * rather than fetched once: this is the screen someone leaves open while the
+   * phone is ringing, and a briefing frozen at page load is the thing it is
+   * least allowed to be.
+   */
+  const conversationsQuery = useQuery({
+    queryKey: qk.conversations({ limit: 8 }),
+    queryFn: () => service.listConversations({ limit: 8 }),
+    refetchInterval: 15_000,
+  });
+
   const hydrated = useOnboarding((s) => s.hydrated);
   const hydrate = useOnboarding((s) => s.hydrate);
   const snapshot = useOnboarding();
@@ -47,7 +62,13 @@ export function DomainDashboard() {
   const businessName = snapshot.organization.businessName || pack.name;
   const aiName =
     (snapshot.answers[STANDARD_AI_QUESTION_IDS.name] as string) || pack.aiEmployeeNamePlaceholder;
-  const activity = buildActivityFeed(pack);
+  // Anchored to when the data was fetched, not to `Date.now()` during render:
+  // a clock read mid-render is impure, and "as of this fetch" is the more
+  // honest reading anyway — it re-anchors on every poll.
+  const activity = buildActivityFromConversations(
+    conversationsQuery.data ?? [],
+    conversationsQuery.dataUpdatedAt,
+  );
 
   return (
     <div className="px-5 py-8 sm:px-8 sm:py-12 xl:px-10">
@@ -94,6 +115,23 @@ export function DomainDashboard() {
             </Band>
 
             <Band label={`What ${pack.aiEmployeeRoleName} is doing`}>
+              {activity.length === 0 ? (
+                /* An empty diary is the truth for a workspace whose phone has
+                   not rung yet. Authored sample activity here would be a
+                   dashboard inventing its own history. */
+                <EmptyState
+                  title={
+                    conversationsQuery.isLoading
+                      ? "Loading recent activity…"
+                      : `${aiName} hasn't taken a ${lower(lexicon.call.one)} yet`
+                  }
+                  description={
+                    conversationsQuery.isLoading
+                      ? ""
+                      : `When someone calls, what ${aiName} did will appear here.`
+                  }
+                />
+              ) : (
               <div className="overflow-hidden rounded-panel border border-line bg-elevated">
                 {activity.map((entry, index) => (
                   <div
@@ -113,6 +151,7 @@ export function DomainDashboard() {
                   </div>
                 ))}
               </div>
+              )}
             </Band>
 
             <Band label="Needs your attention">

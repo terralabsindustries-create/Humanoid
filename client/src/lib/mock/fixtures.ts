@@ -2610,6 +2610,17 @@ export const records: DomainRecord[] = [
 
 // ──────────────────────────────────────────────────────────── usage and audit
 
+/**
+ * `meter: null` is load-bearing, not an omission. Northgate is a demo tenant
+ * with a stated invoice; a real tenant's spend is metered off its own calls
+ * and arrives with the units and rates behind it. The screen renders the two
+ * differently on purpose, so a number that was measured never reads the same
+ * as a number that was written down.
+ *
+ * `capBlocked` is empty for the same reason: this fixture's business is one
+ * where all three behaviours at the cap work. What a real deployment can
+ * actually carry out is the backend's answer, not a fixture's.
+ */
 export const usage: UsageSnapshot = {
   spendToday: 4_18,
   spendMonth: 71_40,
@@ -2617,6 +2628,8 @@ export const usage: UsageSnapshot = {
   atCap: "notify",
   callsToday: 47,
   costPerResolution: 11,
+  meter: null,
+  capBlocked: {},
 };
 
 export const connection: ConnectionHealth = {

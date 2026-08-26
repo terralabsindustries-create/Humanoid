@@ -22,7 +22,7 @@ import {
   isSensitive,
   type AuditCategory,
 } from "@/lib/domain/audit";
-import { clockTime, dayHeading, dayKey, relative } from "@/lib/utils/time";
+import { clockTime, dayHeading, dayKey, relativeAgo } from "@/lib/utils/time";
 import type { AuditEvent } from "@/lib/domain/types";
 
 /**
@@ -434,7 +434,7 @@ function EventRow({ event }: { event: AuditEvent }) {
         <time
           dateTime={event.at}
           className="font-mono text-2xs text-faint tabular"
-          title={`${relative(event.at)} ago`}
+          title={`${relativeAgo(event.at)}`}
         >
           {clockTime(event.at)}
         </time>

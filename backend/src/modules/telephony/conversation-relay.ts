@@ -3,6 +3,7 @@ import type { RawData, WebSocket } from "ws";
 import { env } from "@/config/env.js";
 import { resolveAiEmployeeById } from "@/modules/telephony/ai-receptionist.js";
 import { parseRelayMessage, serializeRelayMessage, type RelayInbound } from "@/modules/telephony/relay-protocol.js";
+import { callParties } from "@/modules/telephony/twilio-request.js";
 import { verifyVoiceToken, type VoiceTokenPayload } from "@/modules/telephony/voice-token.js";
 import {
   activeVoiceSessionCount,
@@ -58,6 +59,25 @@ export function registerConversationRelay(app: FastifyInstance): void {
   );
 }
 
+/**
+ * ConversationRelay's inbound vocabulary is documented, but Twilio adds to it —
+ * event subscriptions in particular. Logging what we do not recognise is how a
+ * new message type gets discovered rather than silently dropped; a
+ * speech-finished event, if one exists, would replace the hang-up delay with an
+ * exact signal.
+ */
+function logUnrecognisedFrame(request: FastifyRequest, frame: string): void {
+  let type: unknown;
+  try {
+    type = (JSON.parse(frame) as { type?: unknown }).type;
+  } catch {
+    request.log.warn("ConversationRelay sent a frame that is not JSON");
+    return;
+  }
+  // The frame body can carry transcript text, so only the type is logged.
+  request.log.info({ type }, "ConversationRelay sent an unrecognised message type");
+}
+
 /** `ws` hands over a Buffer, an ArrayBuffer, or the fragments of a split frame. */
 function decodeFrame(data: RawData): string {
   if (Buffer.isBuffer(data)) return data.toString("utf8");
@@ -99,8 +119,12 @@ function attach(socket: WebSocket, request: FastifyRequest, token: VoiceTokenPay
     // ConversationRelay speaks JSON. A binary frame is not ours to interpret.
     if (isBinary) return;
 
-    const message = parseRelayMessage(decodeFrame(data));
-    if (!message) return;
+    const frame = decodeFrame(data);
+    const message = parseRelayMessage(frame);
+    if (!message) {
+      logUnrecognisedFrame(request, frame);
+      return;
+    }
 
     void handleMessage(message).catch((error: unknown) => {
       request.log.error({ err: error }, "ConversationRelay message handling failed");
@@ -152,6 +176,8 @@ function attach(socket: WebSocket, request: FastifyRequest, token: VoiceTokenPay
           conversationId: token.conversationId,
           employee,
           transport,
+          // Whichever end of the call the person is actually on.
+          callerNumber: callParties(message.direction, message.from, message.to).human,
         });
 
         console.log(

@@ -32,6 +32,8 @@ export type ApiConversation = {
   id: string;
   workspaceId: string;
   aiEmployeeId: string | null;
+  /** The directory record for whoever rang. Null for a withheld number. */
+  partyId: string | null;
   channelType: string;
   direction: string;
   /** active | completed | failed */
@@ -60,8 +62,16 @@ export type ApiConversationStats = {
   activeCalls: number;
 };
 
-export function listConversations(workspaceId: string, limit?: number) {
-  const query = limit ? `?limit=${limit}` : "";
+export function listConversations(
+  workspaceId: string,
+  options: { limit?: number; partyId?: string } = {},
+) {
+  const params = new URLSearchParams();
+  if (options.limit) params.set("limit", String(options.limit));
+  // Filtered server-side: one person's history has to reach past whatever the
+  // most recent page of calls happens to contain.
+  if (options.partyId) params.set("partyId", options.partyId);
+  const query = params.size > 0 ? `?${params}` : "";
   return http.get<ApiConversation[]>(`/workspaces/${workspaceId}/conversations${query}`);
 }
 

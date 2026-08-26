@@ -88,7 +88,12 @@ const schema = z.object({
 
   LLM_BASE_URL: z.string().default("https://api.groq.com/openai/v1"),
   LLM_API_KEY: optionalString,
-  LLM_MODEL: z.string().default("llama-3.3-70b-versatile"),
+  LLM_MODEL: z.string().default("openai/gpt-oss-20b"),
+  // Passed through to the provider when set. On a phone call this is a latency
+  // dial: a reasoning model writes its thinking before its first spoken word
+  // and the caller waits through all of it. Groq accepts "none", which is the
+  // one that matters here; leave blank for models that do not reason.
+  LLM_REASONING_EFFORT: optionalString,
   // Stopgap until a phone-number → workspace table exists: pins which
   // onboarded workspace's AI employee answers the test number. Unset means
   // "the most recently configured one".
@@ -99,18 +104,19 @@ const schema = z.object({
   // Twilio holds one WebSocket open for the whole call and owns both speech
   // recognition and text-to-speech; this backend exchanges JSON *text* with
   // it. That is why there is no ElevenLabs key here — the ElevenLabs
-  // credential lives in the Twilio Console, and audio never transits this
+  // TTS is billed through Twilio, and audio never transits this
   // process. Off flips the phone line back to the `<Gather>` loop.
   VOICE_RELAY_ENABLED: booleanFlag(true),
-  // Passed straight through to <ConversationRelay ttsProvider>. "ElevenLabs"
-  // requires an ElevenLabs credential configured on the Twilio account.
+  // Passed straight through to <ConversationRelay ttsProvider>. ElevenLabs,
+  // Google and Amazon are first-party providers; none needs a credential.
   TWILIO_TTS_PROVIDER: z.string().default("ElevenLabs"),
   TWILIO_TRANSCRIPTION_PROVIDER: optionalString,
   TWILIO_SPEECH_MODEL: optionalString,
   // Identifiers, not credentials — they name a voice for Twilio to ask
-  // ElevenLabs for, and are worthless to anyone who has them. The actual
-  // ElevenLabs secret lives on the Twilio account; this process never holds
-  // one and never speaks to ElevenLabs directly.
+  // ElevenLabs for, and are worthless to anyone who has them. There is no
+  // ElevenLabs secret anywhere in this system: Twilio resells the voice as a
+  // first-party ConversationRelay provider, and this process never speaks to
+  // ElevenLabs at all. Concatenated as "<voiceId>-<modelId>".
   ELEVENLABS_VOICE_ID: optionalString,
   ELEVENLABS_MODEL_ID: optionalString,
   // How eagerly Twilio treats caller speech as a barge-in.
@@ -120,6 +126,39 @@ const schema = z.object({
   VOICE_RELAY_TOKEN_SECRET: optionalString,
   // Stops a forgotten call from looping on Twilio's dime.
   VOICE_RELAY_MAX_TURNS: z.coerce.number().int().positive().default(50),
+  // Pause between the employee's farewell and hanging up. Twilio's docs do not
+  // say whether ending a session lets pending speech finish, and the
+  // difference is the caller hearing "Have a lovely day" or "Have a lovely—".
+  // Measure it on a real call and set this to what that shows.
+  VOICE_RELAY_HANGUP_DELAY_MS: z.coerce.number().int().min(0).default(0),
+
+  // Usage metering.
+  //
+  // These are *rates*, not bills. Twilio invoices the telephony and the model
+  // provider invoices the tokens, and neither invoice is visible from inside
+  // this process — what is visible is how long each call was connected and how
+  // many tokens it burned. Multiplying those by a rate someone typed here is
+  // the honest most this system can do, and `/govern/usage` says so on the
+  // screen rather than dressing the result up as an invoice.
+  //
+  // Defaults are deliberately in the right order of magnitude for a UK Twilio
+  // number on ConversationRelay with a small hosted model, and deliberately
+  // not anybody's real price list. Set them from your own bills.
+  //
+  // Minor units (pence, cents) per connected minute, covering the whole
+  // telephony leg: inbound voice, speech recognition and speech synthesis,
+  // which Twilio bills together and this system cannot separate.
+  USAGE_RATE_VOICE_PER_MINUTE: z.coerce.number().min(0).default(9),
+  // Minor units per million tokens. Input and output are priced separately
+  // because every provider prices them separately, often by a factor of five.
+  USAGE_RATE_MODEL_INPUT_PER_MTOKEN: z.coerce.number().min(0).default(8),
+  USAGE_RATE_MODEL_OUTPUT_PER_MTOKEN: z.coerce.number().min(0).default(40),
+  // Asks the model provider to report token counts alongside the stream. The
+  // escape hatch is for an OpenAI-compatible endpoint that rejects
+  // `stream_options` outright: turning it off costs the model half of the
+  // meter, and `tokens_metered` then records that nobody counted rather than
+  // letting zero read as free.
+  USAGE_METER_TOKENS: booleanFlag(true),
 });
 
 const parsed = schema.safeParse(process.env);

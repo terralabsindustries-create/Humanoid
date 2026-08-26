@@ -14,6 +14,11 @@ import { registerWorkspaceRoutes } from "@/modules/workspaces/workspace.routes.j
 import { registerOnboardingRoutes } from "@/modules/onboarding/onboarding.routes.js";
 import { registerAiEmployeeRoutes } from "@/modules/ai-employees/ai-employee.routes.js";
 import { registerConversationRoutes } from "@/modules/conversations/conversation.routes.js";
+import { registerRecordRoutes } from "@/modules/records/record.routes.js";
+import { registerReviewRoutes } from "@/modules/review/review.routes.js";
+import { registerPartyRoutes } from "@/modules/parties/party.routes.js";
+import { registerUsageRoutes } from "@/modules/usage/usage.routes.js";
+import { registerScheduleRoutes } from "@/modules/schedule/schedule.routes.js";
 import { registerUserRoutes } from "@/modules/users/user.routes.js";
 import { registerTwilioVoiceRoutes } from "@/modules/telephony/voice.routes.js";
 import { registerConversationRelay } from "@/modules/telephony/conversation-relay.js";
@@ -67,6 +72,11 @@ export async function buildApp() {
       registerOnboardingRoutes(api);
       registerAiEmployeeRoutes(api);
       registerConversationRoutes(api);
+      registerRecordRoutes(api);
+      registerReviewRoutes(api);
+      registerPartyRoutes(api);
+      registerUsageRoutes(api);
+      registerScheduleRoutes(api);
       registerUserRoutes(api);
       registerTwilioVoiceRoutes(api);
       registerConversationRelay(api);

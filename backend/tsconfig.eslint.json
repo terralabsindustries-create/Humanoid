@@ -4,6 +4,6 @@
     "rootDir": ".",
     "noEmit": true
   },
-  "include": ["src", "test", "prisma", "*.ts", "*.mjs"],
+  "include": ["src", "test", "prisma", "scripts", "*.ts", "*.mjs"],
   "exclude": ["node_modules", "dist"]
 }
