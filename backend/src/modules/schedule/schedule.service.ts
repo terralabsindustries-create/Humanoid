@@ -454,6 +454,14 @@ export type SuggestQuery = {
   limit?: number;
   /** How many local days ahead to look before giving up. */
   horizonDays?: number;
+  /**
+   * Whether the asked-for time is itself excluded from the results. True when
+   * these are *alternatives* to a time that did not work — offering it back is
+   * nonsense. False when surveying a whole day, where the requested instant is
+   * only the anchor the search sorts around and excluding it would drop a
+   * genuinely free slot from the list.
+   */
+  excludeRequested?: boolean;
 };
 
 /**
@@ -496,7 +504,7 @@ export async function suggestSlots(query: SuggestQuery): Promise<Date[]> {
       for (let minute = first; minute + durationMinutes <= period.closesMinute; minute += slotMinutes) {
         const instant = instantAt(date, minute, schedule.timezone);
         if (instant.getTime() < notBefore) continue;
-        if (instant.getTime() === query.at.getTime()) continue;
+        if (query.excludeRequested !== false && instant.getTime() === query.at.getTime()) continue;
         candidates.push(instant);
       }
     }

@@ -257,6 +257,20 @@ describe("availability", () => {
       expect(overlapping).toContain("Nothing was booked");
     });
 
+    it("surveys a whole day without dropping the slot it anchored on", async () => {
+      // The day survey anchors at midday because that is the middle of a
+      // trading day; noon is a real bookable slot and must appear in the list.
+      const said = await bookingRunner({
+        workspaceId,
+        conversationId,
+        callerNumber: "+447700900123",
+        timezone: TZ,
+      })(AVAILABILITY_TOOL_NAME, { date: FRIDAY });
+
+      expect(said).toContain("open");
+      expect(said).toContain("still have room");
+    });
+
     it("only offers alternatives that still have room", async () => {
       await bookAt("09:00", "+447700900001");
       await bookAt("09:00", "+447700900002");

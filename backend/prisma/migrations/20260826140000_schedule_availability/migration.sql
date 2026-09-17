@@ -12,17 +12,21 @@
 -- row. Minutes from local midnight rather than database.md's opens_at/closes_at,
 -- because a kitchen open until half past one closes at 1530 and no TIME column
 -- holds that. location_id/department_id are omitted — neither table exists.
+--
+-- The weekday column is renamed to day_of_week by the migration that follows
+-- this one; it is spelled the old way here because this migration had already
+-- been applied, and an applied migration is never edited in place.
 CREATE TABLE "business_hours" (
     "id" TEXT NOT NULL,
     "workspace_id" TEXT NOT NULL,
-    "day_of_week" INTEGER NOT NULL,
+    "weekday" INTEGER NOT NULL,
     "opens_minute" INTEGER NOT NULL,
     "closes_minute" INTEGER NOT NULL,
 
     CONSTRAINT "business_hours_pkey" PRIMARY KEY ("id")
 );
 
-CREATE INDEX "business_hours_workspace_id_day_of_week_idx" ON "business_hours"("workspace_id", "day_of_week");
+CREATE INDEX "business_hours_workspace_id_weekday_idx" ON "business_hours"("workspace_id", "weekday");
 
 ALTER TABLE "business_hours" ADD CONSTRAINT "business_hours_workspace_id_fkey" FOREIGN KEY ("workspace_id") REFERENCES "workspaces"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 

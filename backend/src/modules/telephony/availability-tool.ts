@@ -173,6 +173,9 @@ async function describeDay(
     schedule,
     limit: 3,
     horizonDays: 0,
+    // The anchor is midday, not something the caller asked for — dropping it
+    // would hide a free noon slot from a caller asking what the day has.
+    excludeRequested: false,
   });
 
   return free.length > 0
