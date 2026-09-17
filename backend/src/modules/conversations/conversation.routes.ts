@@ -10,7 +10,11 @@ const conversationParamsSchema = z.object({
   workspaceId: z.string().min(1),
   conversationId: z.string().min(1),
 });
-const listQuerySchema = z.object({ limit: z.coerce.number().int().positive().max(200).optional() });
+const listQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(200).optional(),
+  /** Every call with one person, for their directory record's history. */
+  partyId: z.string().min(1).optional(),
+});
 
 export function registerConversationRoutes(app: FastifyInstance): void {
   // GET /workspaces/:workspaceId/conversations
@@ -19,9 +23,9 @@ export function registerConversationRoutes(app: FastifyInstance): void {
     { preHandler: app.authenticate },
     async (request, reply) => {
       const { workspaceId } = workspaceIdParamsSchema.parse(request.params);
-      const { limit } = listQuerySchema.parse(request.query);
+      const { limit, partyId } = listQuerySchema.parse(request.query);
       await requireWorkspaceMember(request.userId!, workspaceId);
-      const conversations = await conversationService.listConversations(workspaceId, limit);
+      const conversations = await conversationService.listConversations(workspaceId, { limit, partyId });
       reply.send({ data: conversations });
     },
   );

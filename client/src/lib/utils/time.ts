@@ -13,8 +13,18 @@ export function now(): number {
 }
 
 /** "just now", "4m", "2h", "3d" — compact enough for dense rows. */
-export function relative(iso: string): string {
-  const diffMs = now() - new Date(iso).getTime();
+/**
+ * `atMs` is the clock to measure against, defaulting to the fixture anchor.
+ *
+ * Real data must pass `Date.now()`. `MOCK_NOW` is a fixed instant in the past,
+ * so a genuinely recent timestamp measured against it produces a *negative*
+ * difference, falls through the first branch, and reads "just now" forever —
+ * a booking taken last week and one taken a minute ago look identical. Only
+ * pass a real clock from a component that does not server-render its output,
+ * or the server and client will disagree on the boundary cases.
+ */
+export function relative(iso: string, atMs: number = now()): string {
+  const diffMs = atMs - new Date(iso).getTime();
   const seconds = Math.round(diffMs / 1000);
 
   if (seconds < 45) return "just now";
@@ -35,8 +45,8 @@ export function relative(iso: string): string {
  * moment something happens, which is exactly when someone is looking at it. A
  * real onboarded workspace hits that case on its first page load.
  */
-export function relativeAgo(iso: string): string {
-  const value = relative(iso);
+export function relativeAgo(iso: string, atMs: number = now()): string {
+  const value = relative(iso, atMs);
   return value === "just now" ? value : `${value} ago`;
 }
 

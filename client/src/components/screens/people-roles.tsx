@@ -22,12 +22,14 @@ import { hasCapability, navItemById, resolveLabel } from "@/lib/navigation";
 import {
   CAPABILITIES,
   capabilityById,
+  ESCALATION_CAPABILITIES,
   escalationGaps,
   groupCapabilities,
   hasCoverageGap,
   hasDrift,
   heldCount,
   isOwner,
+  presetDelta,
   resolveCopy,
   resolveCover,
   ROLE_CAPABILITIES,
@@ -38,7 +40,7 @@ import {
   type Cover,
 } from "@/lib/domain/people";
 import { dayAndTime, now } from "@/lib/utils/time";
-import { lower } from "@/lib/lexicon";
+import { lower, withArticle } from "@/lib/lexicon";
 import type { Location, OnCallEntry, RolePreset, User } from "@/lib/domain/types";
 
 /**
@@ -760,10 +762,19 @@ function PersonActions({
 }) {
   const queryClient = useQueryClient();
 
+  /**
+   * Which role is armed but not yet confirmed. Assigning one is not a
+   * preference toggle — it can hand someone every permission in the product, or
+   * take away the one they are rostered to use tonight — so it names its
+   * consequence and waits, the way publishing a release does.
+   */
+  const [armed, setArmed] = useState<RolePreset | null>(null);
+
   const assignRole = useMutation({
     mutationFn: (role: RolePreset) =>
       service.assignRole({ userId: user.id, role }),
     onSuccess: () => {
+      setArmed(null);
       void queryClient.invalidateQueries({ queryKey: qk.users });
       // A role change can remove the ability to take an escalation, so the
       // band above has to re-read rather than keep asserting yesterday's answer.
@@ -799,20 +810,41 @@ function PersonActions({
           leave this workspace with nobody able to undo it. Another owner or
           governor can.
         </p>
+      ) : armed ? (
+        <RoleConfirmation
+          user={user}
+          role={armed}
+          pending={assignRole.isPending}
+          onCancel={() => setArmed(null)}
+          onConfirm={() => assignRole.mutate(armed)}
+        />
       ) : (
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {ROLE_PRESETS.map((preset) => (
-            <Button
-              key={preset}
-              size="sm"
-              variant={preset === user.role ? "primary" : "secondary"}
-              disabled={preset === user.role || assignRole.isPending}
-              loading={assignRole.isPending && assignRole.variables === preset}
-              onClick={() => assignRole.mutate(preset)}
-            >
-              {ROLE_LABEL[preset]}
-            </Button>
-          ))}
+          {ROLE_PRESETS.map((preset) => {
+            // Disabled when assigning it would change nothing — which is not
+            // the same as "it is the role they already wear". Someone badged
+            // Operator while missing half the set has a live repair available
+            // on the Operator button, and that repair is exactly what the
+            // drift note above tells them to press.
+            const delta = presetDelta(user, preset);
+            const changesNothing =
+              delta.gains.length === 0 &&
+              delta.loses.length === 0 &&
+              !delta.becomesOwner &&
+              !delta.losesOwnership;
+
+            return (
+              <Button
+                key={preset}
+                size="sm"
+                variant="secondary"
+                disabled={changesNothing}
+                onClick={() => setArmed(preset)}
+              >
+                {ROLE_LABEL[preset]}
+              </Button>
+            );
+          })}
         </div>
       )}
 
@@ -844,6 +876,106 @@ function PersonActions({
             : "That change was not saved. Nothing has been altered — try again."}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * The armed state of a role assignment.
+ *
+ * It states the change as what this person will and will not be able to do
+ * afterwards, rather than as a role name swapping for another role name. The
+ * name is the thing that was already misleading — the whole screen exists
+ * because a badge reading "Operator" told somebody nothing about whether
+ * Saoirse could pick up at 19:40.
+ *
+ * The diff is against what they hold *today*, so re-assigning someone the role
+ * they already wear reads as the repair it actually is rather than as "no
+ * change".
+ */
+function RoleConfirmation({
+  user,
+  role,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  user: User;
+  role: RolePreset;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const lexicon = useLexicon();
+  const delta = presetDelta(user, role);
+
+  const names = (capabilities: typeof delta.gains) =>
+    joinList(capabilities.map((c) => lower(resolveCopy(c.label, lexicon))));
+
+  return (
+    <div className="mt-2 rounded-panel border border-line bg-elevated px-3 py-3">
+      <p className="text-sm font-medium text-ink">
+        Make {user.name} {withArticle(ROLE_LABEL[role])}?
+      </p>
+
+      {/* Owner is different in kind rather than in size, so it is said plainly
+          rather than folded into a list of twenty-eight gained capabilities. */}
+      {delta.becomesOwner && (
+        <p className="mt-1.5 text-sm text-muted">
+          That is every permission in this product, including any added to it
+          later, and the ability to grant the same to anyone else.
+        </p>
+      )}
+
+      {delta.losesOwnership && (
+        <p className="mt-1.5 text-sm text-muted">
+          They stop being an owner. Permissions added to this product in future
+          will no longer reach them automatically.
+        </p>
+      )}
+
+      <div className="mt-2 space-y-1.5">
+        {delta.gains.length > 0 && !delta.becomesOwner && (
+          <p className="text-sm text-muted">
+            <span className="text-ink">Gains</span> {names(delta.gains)}.
+          </p>
+        )}
+        {delta.loses.length > 0 && (
+          <p className="text-sm text-muted">
+            <span className="text-ink">Loses</span> {names(delta.loses)}.
+          </p>
+        )}
+      </div>
+
+      {/* The one loss worth interrupting for: it is the failure this screen's
+          top band is built to catch, so it should not be created here silently. */}
+      {delta.loses.some((capability) =>
+        ESCALATION_CAPABILITIES.includes(
+          capability.id as (typeof ESCALATION_CAPABILITIES)[number],
+        ),
+      ) && (
+        <Callout tone="warning" icon={TriangleAlert}>
+          <p className="text-sm text-muted">
+            After this they can no longer take a {lower(lexicon.conversation.one)}{" "}
+            off the AI. If they are on the rota, check the escalation path above
+            before you confirm.
+          </p>
+        </Callout>
+      )}
+
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="primary"
+          loading={pending}
+          onClick={onConfirm}
+        >
+          Make them {lower(ROLE_LABEL[role])}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={pending} onClick={onCancel}>
+          Cancel
+        </Button>
+      </div>
     </div>
   );
 }

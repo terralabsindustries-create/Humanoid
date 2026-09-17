@@ -1,8 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useQueries, useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Minus, Plus } from "lucide-react";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { ArrowLeft, ArrowUpRight, Minus, Plus } from "lucide-react";
 import { cn } from "@/lib/utils/cn";
 import { qk, service } from "@/lib/services";
 import {
@@ -10,6 +15,7 @@ import {
   useLexicon,
   useWorkspace,
 } from "@/components/providers/app-providers";
+import { Button } from "@/components/primitives/button";
 import { ErrorState } from "@/components/primitives/empty-state";
 import {
   LoadingAnnouncement,
@@ -41,8 +47,13 @@ import {
 import { resolveNavLabel, type DomainPack } from "@/lib/domains/registry";
 import { SCREENS } from "@/lib/screen-registry";
 import { count, lower, type Lexicon } from "@/lib/lexicon";
-import { dayAndTime, duration, relative } from "@/lib/utils/time";
-import type { Conversation, ProposedFix, ReviewIssue } from "@/lib/domain/types";
+import { dayAndTime, duration,  relativeAgo } from "@/lib/utils/time";
+import type {
+  Conversation,
+  IssueStatus,
+  ProposedFix,
+  ReviewIssue,
+} from "@/lib/domain/types";
 
 /**
  * A destination's own name, resolved exactly as the sidebar resolves it —
@@ -165,14 +176,15 @@ function IssueBody({ issue }: { issue: ReviewIssue }) {
           <span className="font-medium text-ink tabular">
             {count(issue.affectedConversationCount, lexicon.conversation)}
           </span>{" "}
-          · first seen {relative(issue.firstSeenAt)} ago · last seen{" "}
-          {relative(issue.lastSeenAt)} ago
+          · first seen {relativeAgo(issue.firstSeenAt)} · last seen{" "}
+          {relativeAgo(issue.lastSeenAt)}
         </p>
       </header>
 
       <div className="mt-10 space-y-10">
         <Evidence issue={issue} />
         <Fix issue={issue} />
+        <Triage issue={issue} />
       </div>
     </Page>
   );
@@ -276,7 +288,7 @@ function Facts({ issue }: { issue: ReviewIssue }) {
       <Fact label="Last seen">
         <span className="text-ink">
           {dayAndTime(issue.lastSeenAt)}{" "}
-          <span className="text-faint">({relative(issue.lastSeenAt)} ago)</span>
+          <span className="text-faint">({relativeAgo(issue.lastSeenAt)})</span>
         </span>
       </Fact>
 
@@ -321,7 +333,6 @@ function Fact({
  */
 function Evidence({ issue }: { issue: ReviewIssue }) {
   const lexicon = useLexicon();
-  const pack = useDomainPack();
 
   const results = useQueries({
     queries: issue.evidenceConversationIds.map((id) => ({
@@ -334,8 +345,6 @@ function Evidence({ issue }: { issue: ReviewIssue }) {
   const conversations = results
     .map((result) => result.data)
     .filter((value): value is Conversation => Boolean(value));
-
-  const conversationsLink = navItemById("conversations");
 
   return (
     <Band label="Evidence">
@@ -358,19 +367,8 @@ function Evidence({ issue }: { issue: ReviewIssue }) {
           <p className="mt-3.5 text-xs text-faint">
             {conversations.length} of{" "}
             {count(issue.affectedConversationCount, lexicon.conversation)}{" "}
-            attached as evidence.{" "}
-            {conversationsLink && (
-              <>
-                Recordings and full transcripts live in{" "}
-                <Link
-                  href={conversationsLink.href}
-                  className="underline underline-offset-4 hover:text-ink"
-                >
-                  {navLabel(conversationsLink, lexicon, pack)}
-                </Link>
-                .
-              </>
-            )}
+            attached as evidence — a sample, not the whole list. Open one for
+            the full transcript.
           </p>
         </>
       )}
@@ -378,13 +376,28 @@ function Evidence({ issue }: { issue: ReviewIssue }) {
   );
 }
 
+/**
+ * One piece of evidence, and the way into the call behind it.
+ *
+ * The card carries enough to judge without leaving the page — outcome, named
+ * blocker, and any failed action with its error verbatim — and opens the full
+ * transcript for the times that is not enough. Judgement that has to be taken
+ * on trust is not judgement.
+ */
 function EvidenceCard({ conversation }: { conversation: Conversation }) {
   const failures = conversation.actions.filter(
     (action) => action.status === "failed",
   );
 
   return (
-    <article className="rounded-panel border border-line bg-elevated p-4">
+    <Link
+      href={`/conversations/${conversation.id}`}
+      className={cn(
+        "group block rounded-panel border border-line bg-elevated p-4",
+        "transition-colors hover:border-line-strong hover:bg-subtle",
+        "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+      )}
+    >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <StatusPill tone={OUTCOME_TONE[conversation.outcome]}>
@@ -397,13 +410,19 @@ function EvidenceCard({ conversation }: { conversation: Conversation }) {
           )}
         </div>
         <span className="font-mono text-2xs text-faint tabular">
-          {relative(conversation.startedAt)} ago ·{" "}
+          {relativeAgo(conversation.startedAt)} ·{" "}
           {duration(conversation.effort.durationSeconds)}
         </span>
       </div>
 
-      <p className="mt-2.5 text-sm font-medium text-ink">
-        {conversation.intent ?? "No intent recorded"}
+      <p className="mt-2.5 flex items-start gap-1.5 text-sm font-medium text-ink">
+        <span className="min-w-0">
+          {conversation.intent ?? "No intent recorded"}
+        </span>
+        <ArrowUpRight
+          className="mt-0.5 size-3.5 shrink-0 text-faint transition-colors group-hover:text-ink"
+          aria-hidden
+        />
       </p>
       <p className="mt-0.5 font-mono text-xs text-faint">
         {conversation.fromLabel}
@@ -426,7 +445,7 @@ function EvidenceCard({ conversation }: { conversation: Conversation }) {
           )}
         </div>
       ))}
-    </article>
+    </Link>
   );
 }
 
@@ -589,6 +608,108 @@ function NextSteps({ issue, fix }: { issue: ReviewIssue; fix: ProposedFix }) {
     </Band>
   );
 }
+
+/**
+ * Where this cause stands, and the only thing on this screen that writes.
+ *
+ * Worth being exact about what it is: triage, not repair. Moving a cause to
+ * "being fixed" tells everyone else looking at the queue that someone has it;
+ * marking it resolved records a judgement that it has been dealt with. Neither
+ * touches what the AI employee says or does — that change is made in Build,
+ * against a draft, and the band above says so.
+ *
+ * The four status tabs on the queue are its whole structure, so a version of
+ * this screen where nothing could move between them would leave three of the
+ * four permanently empty and the tabs would be decoration.
+ */
+function Triage({ issue }: { issue: ReviewIssue }) {
+  const { user } = useWorkspace();
+  const capabilities = user?.capabilities ?? [];
+  const queryClient = useQueryClient();
+
+  const move = useMutation({
+    mutationFn: (status: IssueStatus) =>
+      service.updateReviewIssueStatus(issue.id, status),
+    // The queue and this screen read the same causes under one key prefix, so
+    // one invalidation keeps a status the queue is showing from disagreeing
+    // with the one on the row you just changed.
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["review", "issues"] }),
+  });
+
+  if (!hasCapability(capabilities, "issue.resolve")) {
+    return (
+      <Band label="Where this stands">
+        <p className="max-w-prose text-md text-muted">
+          This is {lower(ISSUE_STATUS_LABEL[issue.status])}. Your role can read
+          the queue and act on what it finds; moving a cause through it —
+          picking it up, closing it, setting it aside — is someone else&rsquo;s
+          call.
+        </p>
+      </Band>
+    );
+  }
+
+  const transitions = TRANSITIONS[issue.status];
+
+  return (
+    <Band label="Where this stands">
+      <p className="max-w-prose text-md text-muted">{STANDING[issue.status]}</p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        {transitions.map((transition) => (
+          <Button
+            key={transition.status}
+            variant={transition.variant}
+            size="sm"
+            loading={move.isPending && move.variables === transition.status}
+            disabled={move.isPending}
+            onClick={() => move.mutate(transition.status)}
+          >
+            {transition.label}
+          </Button>
+        ))}
+      </div>
+
+      {move.isError && (
+        <p className="mt-3 text-sm text-danger">
+          That did not save. The cause is unchanged — try again.
+        </p>
+      )}
+    </Band>
+  );
+}
+
+/**
+ * What each status means, said as a state of the world rather than as a label.
+ * "Open" on its own tells someone nothing they could not see from the pill.
+ */
+const STANDING: Record<IssueStatus, string> = {
+  open: "Nobody has picked this up. It is still counting against the queue, and every occurrence since it was raised is still landing on it.",
+  in_progress:
+    "Someone has this. It stays in the queue and keeps counting occurrences — being worked on is not the same as stopped.",
+  resolved:
+    "This has been dealt with. If it happens again it comes back to the top of the queue, because a cause that recurs was not fixed.",
+  dismissed:
+    "Set aside deliberately: understood, and judged not worth changing anything for. It stays dismissed even if it happens again — that is the point of dismissing it rather than resolving it.",
+};
+
+/** Where a cause can go from where it is, and which move is the expected one. */
+const TRANSITIONS: Record<
+  IssueStatus,
+  { status: IssueStatus; label: string; variant: "primary" | "secondary" | "quiet" }[]
+> = {
+  open: [
+    { status: "in_progress", label: "I'm fixing this", variant: "primary" },
+    { status: "dismissed", label: "Set aside", variant: "quiet" },
+  ],
+  in_progress: [
+    { status: "resolved", label: "Mark dealt with", variant: "primary" },
+    { status: "open", label: "Hand it back", variant: "quiet" },
+  ],
+  resolved: [{ status: "open", label: "Reopen", variant: "secondary" }],
+  dismissed: [{ status: "open", label: "Reopen", variant: "secondary" }],
+};
 
 /**
  * The Build surface a fix would be made on — as a link only for someone

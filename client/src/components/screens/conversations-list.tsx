@@ -9,6 +9,7 @@ import { qk, service } from "@/lib/services";
 import { useScope } from "@/lib/store/scope";
 import { useDomainPack, useLexicon } from "@/components/providers/app-providers";
 import { resolveNavLabel } from "@/lib/domains/registry";
+import { isLiveStatus } from "@/lib/domain/types";
 import { Input } from "@/components/primitives/input";
 import { StatusPill } from "@/components/primitives/status";
 import { EmptyState, ErrorState } from "@/components/primitives/empty-state";
@@ -42,7 +43,10 @@ export function ConversationsList() {
   const query = useQuery({
     queryKey: qk.conversations(filters),
     queryFn: () => service.listConversations(filters),
-    refetchInterval: 30_000,
+    // Faster while a call is in progress: a row that says "live now" should
+    // not be a minute stale, and the list is where a supervisor notices one.
+    refetchInterval: (q) =>
+      (q.state.data ?? []).some((c) => isLiveStatus(c.status)) ? 5_000 : 30_000,
   });
 
   const title = resolveNavLabel("conversations", lexicon.conversation.many, domainPack);
@@ -59,7 +63,7 @@ export function ConversationsList() {
     );
   }, [query.data, search]);
 
-  const liveCount = (query.data ?? []).filter((c) => c.status === "active").length;
+  const liveCount = (query.data ?? []).filter((c) => isLiveStatus(c.status)).length;
 
   return (
     <div className="px-5 py-8 sm:px-8 sm:py-12 xl:px-10">

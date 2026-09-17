@@ -50,7 +50,16 @@ export type SuggestedIntegration = {
   description: string;
 };
 
-/** One template for a live-activity entry. The mock generator assigns timing. */
+/**
+ * One template for a live-activity entry.
+ *
+ * No longer rendered. The dashboard's "what your AI employee is doing" band
+ * reads the tenant's real calls (`dashboard-activity.ts`) — authored samples
+ * there would be a dashboard inventing its own history, on the one screen
+ * whose entire claim is "this is what happened here". Kept because a
+ * pre-onboarding preview is the one place sample activity would be honest;
+ * delete it rather than wiring it back into the live dashboard.
+ */
 export type ActivityTemplate = {
   id: string;
   headline: string;
@@ -68,7 +77,7 @@ export type AttentionItem = {
 export type DomainDashboardConfig = {
   /** "Business status" band — the headline figures for this vertical. */
   primaryMetrics: DashboardMetric[];
-  /** "What Humanoid is doing" band. */
+  /** Not rendered on the live dashboard — see `ActivityTemplate`. */
   activityTemplates: ActivityTemplate[];
   /** "What needs human attention" band. Kept short and specific, not generic. */
   attentionItems: AttentionItem[];

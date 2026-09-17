@@ -11,7 +11,7 @@ import { Input } from "@/components/primitives/input";
 import { CAP_BEHAVIOUR_DETAIL, CAP_BEHAVIOUR_LABEL } from "@/lib/domain/labels";
 import { parseMoneyInput, toMoneyInput } from "@/lib/domain/usage";
 import { money } from "@/lib/utils/time";
-import type { UsageSnapshot } from "@/lib/domain/types";
+import type { CapBehaviour } from "@/lib/domain/types";
 
 /**
  * The budget and the behaviour at the cap: the one control this screen has,
@@ -22,7 +22,7 @@ import type { UsageSnapshot } from "@/lib/domain/types";
  * with the same save/cancel shape when open.
  */
 
-type AtCap = UsageSnapshot["atCap"];
+type AtCap = CapBehaviour;
 
 export const CAP_ICON: Record<AtCap, LucideIcon> = {
   notify: Bell,
@@ -73,6 +73,7 @@ export function BudgetEditor({
   budgetMonth,
   atCap,
   currency,
+  blocked = {},
   pending = false,
   error = null,
   onSave,
@@ -81,6 +82,13 @@ export function BudgetEditor({
   budgetMonth: number | null;
   atCap: AtCap;
   currency: string;
+  /**
+   * Behaviours this deployment cannot carry out, keyed to the reason why.
+   * Rendered unselectable with the reason attached rather than dropped from
+   * the list — a setting nothing can honour would be a control that lies about
+   * what happens, and an option silently missing cannot be asked about at all.
+   */
+  blocked?: Partial<Record<AtCap, string>>;
   pending?: boolean;
   /** A failure from the save itself, shown verbatim rather than swallowed. */
   error?: string | null;
@@ -139,6 +147,7 @@ export function BudgetEditor({
             label: CAP_BEHAVIOUR_LABEL[candidate],
             description: CAP_BEHAVIOUR_DETAIL[candidate],
             icon: CAP_ICON[candidate],
+            unavailableReason: blocked[candidate],
           }))}
         />
       </div>

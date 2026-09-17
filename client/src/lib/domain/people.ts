@@ -459,6 +459,48 @@ export function hasDrift(drift: RoleDrift): boolean {
   return drift.extra.length > 0 || drift.missing.length > 0;
 }
 
+export type PresetDelta = {
+  /** Capabilities the preset would add to what they hold today. */
+  gains: CapabilityDefinition[];
+  /** Capabilities they hold today that the preset would take away. */
+  loses: CapabilityDefinition[];
+  /** True when the target is owner: the wildcard, and everything added later. */
+  becomesOwner: boolean;
+  /** True when they are an owner today and would stop being one. */
+  losesOwnership: boolean;
+};
+
+/**
+ * What assigning a preset would actually change for this person.
+ *
+ * Computed against what they hold *now* rather than against their current
+ * preset, because the two are frequently not the same thing — that is what
+ * `roleDrift` reports. Someone badged Operator while missing half the set gains
+ * five capabilities from being re-assigned Operator, and a confirmation step
+ * that said "no change" would be wrong in exactly the case the person is most
+ * likely to be acting on.
+ */
+export function presetDelta(user: User, role: RolePreset): PresetDelta {
+  const wasOwner = isOwner(user);
+  const becomesOwner = role === "owner";
+
+  // Owner is the wildcard, so its effective set is the whole catalogue — the
+  // same resolution `hasCapability` performs.
+  const target = new Set(
+    becomesOwner ? CAPABILITIES.map((c) => c.id) : ROLE_CAPABILITIES[role],
+  );
+  const held = new Set(
+    wasOwner ? CAPABILITIES.map((c) => c.id) : user.capabilities,
+  );
+
+  return {
+    gains: CAPABILITIES.filter((c) => target.has(c.id) && !held.has(c.id)),
+    loses: CAPABILITIES.filter((c) => held.has(c.id) && !target.has(c.id)),
+    becomesOwner: becomesOwner && !wasOwner,
+    losesOwnership: wasOwner && !becomesOwner,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // The escalation path
 // ─────────────────────────────────────────────────────────────────────────────

@@ -35,25 +35,44 @@ model Organization {
 }
 
 model Workspace {
-  id             String   @id @default(cuid())
-  organizationId String   @map("organization_id")
-  name           String
-  slug           String   @unique
-  industryKey    String?  @map("industry_key")
-  timezone       String   @default("Europe/London")
-  locale         String   @default("en-GB")
-  status         String   @default("active")
-  settingsJson   Json     @default("{}") @map("settings_json")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  id               String   @id @default(cuid())
+  organizationId   String   @map("organization_id")
+  name             String
+  slug             String   @unique
+  industryKey      String?  @map("industry_key")
+  /// The E.164 number callers dial to reach this workspace's AI employee.
+  /// Unique because one number cannot ring two businesses; null until a
+  /// number is provisioned, which most workspaces never do.
+  phoneNumber      String?  @unique @map("phone_number")
+  /// Monthly spend ceiling in minor units of the workspace currency. Null is
+  /// "tracked but uncapped", which is a different thing from zero — see
+  /// `parseMoneyInput` on the frontend for why that distinction is load-bearing.
+  budgetMonthMinor Int?     @map("budget_month_minor")
+  /// What happens once spend reaches the budget: notify | voicemail | stop.
+  /// Stored even when no budget is set, so raising one later doesn't silently
+  /// adopt a default nobody chose.
+  atCap            String   @default("notify") @map("at_cap")
+  timezone         String   @default("Europe/London")
+  locale           String   @default("en-GB")
+  status           String   @default("active")
+  settingsJson     Json     @default("{}") @map("settings_json")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
-  organization       Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  memberships         WorkspaceMembership[]
-  onboardingSession   OnboardingSession?
-  aiEmployees          AiEmployee[]
-  auditEvents          AuditEvent[]
-  roles                Role[]
-  conversations        Conversation[]
+  organization       Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships        WorkspaceMembership[]
+  onboardingSession  OnboardingSession?
+  aiEmployees        AiEmployee[]
+  auditEvents        AuditEvent[]
+  roles              Role[]
+  conversations      Conversation[]
+  records            Record[]
+  parties            Party[]
+  reviewIssues       ReviewIssue[]
+  callUsage          CallUsage[]
+  businessHours      BusinessHours[]
+  scheduleExceptions ScheduleException[]
+  bookingPolicy      BookingPolicy?
 
   @@index([organizationId])
   @@map("workspaces")
@@ -97,8 +116,8 @@ model Role {
 }
 
 model Permission {
-  id          String @id @default(cuid())
-  key         String @unique
+  id          String  @id @default(cuid())
+  key         String  @unique
   description String?
 
   rolePermissions RolePermission[]
@@ -193,8 +212,8 @@ model OnboardingAnswer {
   id                  String   @id @default(cuid())
   onboardingSessionId String   @map("onboarding_session_id")
   questionId          String   @map("question_id")
-  valueJson            Json     @map("value_json")
-  updatedAt            DateTime @updatedAt @map("updated_at")
+  valueJson           Json     @map("value_json")
+  updatedAt           DateTime @updatedAt @map("updated_at")
 
   onboardingSession OnboardingSession @relation(fields: [onboardingSessionId], references: [id], onDelete: Cascade)
 
@@ -205,20 +224,21 @@ model OnboardingAnswer {
 // ───────────────────────────────────────────────────────────── AI employee
 
 model AiEmployee {
-  id                             String   @id @default(cuid())
-  workspaceId                    String   @map("workspace_id")
-  name                            String
-  roleName                        String   @map("role_name")
-  status                          String   @default("draft")
-  defaultLanguage                 String   @default("en-GB") @map("default_language")
-  timezone                        String   @default("Europe/London")
-  currentConfigurationVersionId   String?  @map("current_configuration_version_id")
-  createdAt                       DateTime @default(now()) @map("created_at")
-  updatedAt                       DateTime @updatedAt @map("updated_at")
+  id                            String   @id @default(cuid())
+  workspaceId                   String   @map("workspace_id")
+  name                          String
+  roleName                      String   @map("role_name")
+  status                        String   @default("draft")
+  defaultLanguage               String   @default("en-GB") @map("default_language")
+  timezone                      String   @default("Europe/London")
+  currentConfigurationVersionId String?  @map("current_configuration_version_id")
+  createdAt                     DateTime @default(now()) @map("created_at")
+  updatedAt                     DateTime @updatedAt @map("updated_at")
 
-  workspace              Workspace                        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  configurationVersions   AiEmployeeConfigurationVersion[] @relation("EmployeeVersions")
-  conversations           Conversation[]
+  workspace             Workspace                        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  configurationVersions AiEmployeeConfigurationVersion[] @relation("EmployeeVersions")
+  conversations         Conversation[]
+  reviewIssues          ReviewIssue[]
 
   @@index([workspaceId])
   @@map("ai_employees")
@@ -233,30 +253,38 @@ model AiEmployee {
 
 /// One customer interaction, on any channel. Voice is the only one today.
 model Conversation {
-  id            String    @id @default(cuid())
-  workspaceId   String    @map("workspace_id")
-  aiEmployeeId  String?   @map("ai_employee_id")
-  channelType   String    @default("voice") @map("channel_type")
-  direction     String    @default("inbound")
+  id           String    @id @default(cuid())
+  workspaceId  String    @map("workspace_id")
+  aiEmployeeId String?   @map("ai_employee_id")
+  /// Who rang, once they are recognisable. Null for a withheld number — see
+  /// `parties.primary_phone` for why that stays null rather than inventing one.
+  partyId      String?   @map("party_id")
+  channelType  String    @default("voice") @map("channel_type")
+  direction    String    @default("inbound")
   /// active | completed | failed
-  status        String    @default("active")
-  startedAt     DateTime  @default(now()) @map("started_at")
-  endedAt       DateTime? @map("ended_at")
-  language      String    @default("en-GB")
+  status       String    @default("active")
+  startedAt    DateTime  @default(now()) @map("started_at")
+  endedAt      DateTime? @map("ended_at")
+  language     String    @default("en-GB")
   /// Why the call ended: completed | no_speech | turn_limit | caller_hung_up
-  outcomeCode   String?   @map("outcome_code")
-  summary       String?
-  metadataJson  Json      @default("{}") @map("metadata_json")
-  createdAt     DateTime  @default(now()) @map("created_at")
-  updatedAt     DateTime  @updatedAt @map("updated_at")
+  outcomeCode  String?   @map("outcome_code")
+  summary      String?
+  metadataJson Json      @default("{}") @map("metadata_json")
+  createdAt    DateTime  @default(now()) @map("created_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
 
-  workspace   Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  aiEmployee  AiEmployee?           @relation(fields: [aiEmployeeId], references: [id], onDelete: SetNull)
-  callSession CallSession?
-  messages    ConversationMessage[]
+  workspace         Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  aiEmployee        AiEmployee?           @relation(fields: [aiEmployeeId], references: [id], onDelete: SetNull)
+  party             Party?                @relation(fields: [partyId], references: [id], onDelete: SetNull)
+  callSession       CallSession?
+  messages          ConversationMessage[]
+  records           Record[]
+  reviewIssueEvents ReviewIssueEvent[]
+  usage             CallUsage?
 
   @@index([workspaceId, startedAt])
   @@index([workspaceId, status])
+  @@index([partyId])
   @@map("conversations")
 }
 
@@ -302,22 +330,376 @@ model ConversationMessage {
   @@map("conversation_messages")
 }
 
+/// What one call consumed, measured when it ended.
+///
+/// The distinction this table exists to hold is between what is **measured**
+/// and what is **priced**. Connected seconds and token counts are real: they
+/// came off the call. The money is arithmetic over those units at rates this
+/// workspace's operator configured, and is not, and must never be presented
+/// as, an invoice — Twilio bills the telephony and the model provider bills
+/// the tokens, and neither of those bills is visible from inside this process.
+///
+/// `rates_json` snapshots the rates each row was priced at, so changing a rate
+/// tomorrow does not silently rewrite what last month cost.
+///
+/// `tokens_metered` is the honesty flag. A provider that does not report usage
+/// leaves the token columns at zero, which is indistinguishable from a call
+/// that used no tokens unless something says which happened.
+model CallUsage {
+  id                String   @id @default(cuid())
+  workspaceId       String   @map("workspace_id")
+  conversationId    String   @unique @map("conversation_id")
+  /// Wall-clock seconds the call was connected. The billable unit for
+  /// telephony everywhere, and the only cost driver measurable without
+  /// cooperation from the model provider.
+  connectedSeconds  Int      @map("connected_seconds")
+  modelInputTokens  Int      @default(0) @map("model_input_tokens")
+  modelOutputTokens Int      @default(0) @map("model_output_tokens")
+  /// False means nobody counted, not that nothing was used.
+  tokensMetered     Boolean  @default(false) @map("tokens_metered")
+  /// Minor units, kept at four decimal places rather than rounded per call.
+  /// A three-minute call's model cost is a fraction of a penny; rounding it
+  /// at the row would report model spend as zero forever no matter how many
+  /// calls were made.
+  telephonyCost     Decimal  @default(0) @map("telephony_cost_minor") @db.Decimal(14, 4)
+  modelCost         Decimal  @default(0) @map("model_cost_minor") @db.Decimal(14, 4)
+  ratesJson         Json     @default("{}") @map("rates_json")
+  occurredAt        DateTime @map("occurred_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, occurredAt])
+  @@map("call_usage")
+}
+
+/// Something the AI actually did, rather than said.
+///
+/// Shape follows the frontend's `DomainRecord` so the two do not need a
+/// translation layer that could drift: an archetype ("visit", "case", "lead"),
+/// an industry-specific type within it, and a schema-free `fields_json` the
+/// archetype layout renders. A hotel's reservation and a clinic's appointment
+/// are the same row with different words around them.
+model Record {
+  id             String    @id @default(cuid())
+  workspaceId    String    @map("workspace_id")
+  /// The call that produced it. Null for anything created another way, and
+  /// the reason the Reservations screen can link back to the transcript.
+  conversationId String?   @map("conversation_id")
+  /// The person it is for, when the caller could be recognised. `partyName`
+  /// and `partyPhone` below stay populated either way: they are what was said
+  /// on that call, and a later correction in the directory must not silently
+  /// rewrite a booking staff have already acted on.
+  partyId        String?   @map("party_id")
+  archetype      String    @default("visit")
+  typeId         String    @map("type_id")
+  /// confirmed | pending | cancelled | completed
+  status         String    @default("confirmed")
+  /// Denormalised from the call: there is no verified party record yet, and a
+  /// booking with no name on it is useless to the business.
+  partyName      String?   @map("party_name")
+  partyPhone     String?   @map("party_phone")
+  scheduledAt    DateTime? @map("scheduled_at")
+  fieldsJson     Json      @default("{}") @map("fields_json")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  party        Party?        @relation(fields: [partyId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, createdAt])
+  @@index([conversationId])
+  @@index([partyId])
+  /// Counting what already occupies a slot: one workspace, bookings only, a
+  /// narrow window. Without it every availability check is a full scan of the
+  /// tenant's diary, on a caller's turn budget.
+  @@index([workspaceId, typeId, scheduledAt])
+  @@map("records")
+}
+
+// ──────────────────────────────────────────────────────────────── schedule
+//
+// When the business is open, and how much of it can be booked at once.
+//
+// This is what `create_booking` had no way to consult. Without it the employee
+// could confirm three in the morning at a clinic that opens at eight, and the
+// twentieth table at a restaurant that seats twelve — both spoken back to the
+// caller as confirmed, both landing in the diary looking exactly like a good
+// booking. The prompt told the model to say it could not check availability,
+// which is honest but only converts the failure into a callback for staff.
+//
+// The load-bearing rule across all three tables: **an unconfigured schedule is
+// not a closed business.** A workspace with no rows here books exactly as it
+// did before — see `schedule.service.ts`, where that distinction is enforced
+// rather than left to a caller's default.
+
+/// One opening period on one weekday, in the workspace's own timezone.
+///
+/// `database.md` § business_hours specifies this table with `opens_at` /
+/// `closes_at`, an `is_closed` flag, and nullable `location_id` /
+/// `department_id`. Three deliberate divergences, each for a reason the spec's
+/// shape cannot express:
+///
+///   - **Minutes, not times.** A kitchen open until half past one closes at
+///     1530, which no TIME column can hold, and the comparison this table
+///     exists for is arithmetic either way.
+///   - **No `is_closed`.** Closed is the absence of a row, which is also what
+///     lets two rows on one weekday mean a split shift — lunch and dinner
+///     service, or a clinic that shuts at one and reopens at two. One row per
+///     weekday with a flag can express neither.
+///   - **No `location_id` / `department_id`.** Neither table exists in this
+///     schema, for the same reason the rest of it stops where it does: a
+///     foreign key to nothing is fake surface area.
+///
+/// A weekday with no rows is closed — but only once the workspace has any
+/// rows at all. See `schedule.service.ts` for why that distinction is
+/// load-bearing.
+model BusinessHours {
+  id           String @id @default(cuid())
+  workspaceId  String @map("workspace_id")
+  /// 0 = Sunday through 6 = Saturday, matching `Date.getDay()`.
+  dayOfWeek    Int    @map("day_of_week")
+  /// Minutes from local midnight. 540 = 09:00. Stored as minutes rather than
+  /// a time because the comparison this exists for is arithmetic, and a
+  /// `TIME` column would invite a timezone the value does not carry.
+  opensMinute  Int    @map("opens_minute")
+  /// Exclusive, and may exceed 1440 for a period running past midnight — a
+  /// kitchen open until half past one is 1530, not 90 on the next weekday.
+  closesMinute Int    @map("closes_minute")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, dayOfWeek])
+  @@map("business_hours")
+}
+
+/// A specific calendar date that overrides the weekly pattern.
+///
+/// A bank holiday closure, or Christmas Eve closing at two. `closed` is the
+/// common case and the reason this is not just an hours row: a date that is
+/// shut needs to say so, and the absence of a row cannot mean anything
+/// because the weekly pattern is what the absence already means.
+model ScheduleException {
+  id           String   @id @default(cuid())
+  workspaceId  String   @map("workspace_id")
+  /// The local calendar date in the workspace's timezone, as YYYY-MM-DD.
+  /// Deliberately not a timestamp: "the 25th" is a date in the business's
+  /// own calendar, and storing an instant would make it a different day
+  /// somewhere else.
+  date         String
+  closed       Boolean  @default(true)
+  /// Only read when `closed` is false. Null with `closed` false is a row that
+  /// says nothing, which `schedule.service.ts` discards rather than guesses at.
+  opensMinute  Int?     @map("opens_minute")
+  closesMinute Int?     @map("closes_minute")
+  /// Said to the caller, so it is written for them: "Christmas Day", not
+  /// "HOL_2026_12_25".
+  reason       String?
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, date])
+  @@map("schedule_exceptions")
+}
+
+/// How this workspace's bookable time is divided, and how much fits in a slot.
+///
+/// One row per workspace, and its absence is meaningful: no policy means
+/// nothing is capacity-checked, which is the state every workspace is in until
+/// somebody sets one.
+model BookingPolicy {
+  id              String   @id @default(cuid())
+  workspaceId     String   @unique @map("workspace_id")
+  /// The grain the employee offers times on. 30 means half past and on the
+  /// hour; 15 lets it offer quarter past.
+  slotMinutes     Int      @default(30) @map("slot_minutes")
+  /// How long one booking occupies, for deciding what overlaps what. A
+  /// booking is not a point in time — a 60-minute appointment at 09:30
+  /// collides with one at 10:00 on a single chair.
+  durationMinutes Int      @default(30) @map("duration_minutes")
+  /// How many bookings may overlap. **Null means unlimited, and it means
+  /// "nobody has told us the capacity" rather than "there is no limit"** —
+  /// so the employee is told plainly it cannot speak to how full the diary
+  /// is, instead of asserting a free slot it has not checked.
+  capacityPerSlot Int?     @map("capacity_per_slot")
+  /// Minimum notice. A restaurant taking a table for twenty minutes' time is
+  /// fine; a clinic needing an hour is not, and neither is expressible by
+  /// opening hours alone.
+  leadTimeMinutes Int      @default(0) @map("lead_time_minutes")
+  /// How far ahead the diary is open. Beyond it the employee takes details
+  /// rather than booking a date the business has not planned.
+  maxAdvanceDays  Int      @default(180) @map("max_advance_days")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@map("booking_policies")
+}
+
+// ───────────────────────────────────────────────────────────────── parties
+
+/// A person the business deals with — a patient, a guest, a client.
+///
+/// `database.md` § Customers models this as `customers` plus
+/// `customer_identifiers` (hashed, individually verifiable) and
+/// `customer_notes`. Neither of those is built here, for the same reason the
+/// rest of this schema stops where it does: nothing hashes an identifier or
+/// writes a staff note today, and a table nobody fills is fake surface area.
+/// What exists is the part a real call actually produces, and — like `Record`
+/// — it is shaped to the frontend's `Party` so the two cannot drift.
+///
+/// Identity is the caller's number. A withheld number means no record at all:
+/// a row we could not recognise on the next call is not a customer record, it
+/// is a duplicate waiting to happen. A booking such a caller makes still
+/// carries the name and number they gave, on `records`.
+model Party {
+  id                String    @id @default(cuid())
+  workspaceId       String    @map("workspace_id")
+  /// What the business sees. Mirrors the `Name` fact when there is one, and
+  /// falls back to the caller's own number until somebody says a name — which
+  /// is the honest label for a person nobody has introduced.
+  displayName       String    @map("display_name")
+  /// E.164. Unique per workspace because it is what identifies this person on
+  /// the next call. Postgres treats NULLs as distinct, so a numberless record
+  /// would not collide — there simply are none.
+  primaryPhone      String?   @map("primary_phone")
+  primaryEmail      String?   @map("primary_email")
+  /// The language this person was actually spoken to in, taken from the call.
+  preferredLanguage String?   @map("preferred_language")
+  status            String    @default("active")
+  lastContactAt     DateTime? @map("last_contact_at")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  workspace     Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  facts         PartyFact[]
+  conversations Conversation[]
+  records       Record[]
+
+  @@unique([workspaceId, primaryPhone])
+  @@index([workspaceId, lastContactAt])
+  @@map("parties")
+}
+
+/// One claim about a person, and who is behind it.
+///
+/// Provenance is the column this table exists for. The directory's whole job
+/// is answering "what does the AI think it knows, and did anybody check?", so
+/// a fact carries where it came from, and a person confirming or correcting
+/// it is the only thing that produces `verified`.
+///
+/// Addressed by label rather than by id: the label is the question ("Name"),
+/// and a record holds one answer per question.
+model PartyFact {
+  id              String   @id @default(cuid())
+  partyId         String   @map("party_id")
+  label           String
+  value           String
+  /// verified | imported | ai_inferred | unverified
+  source          String   @default("ai_inferred")
+  /// The user who last confirmed or corrected it. Null on anything no person
+  /// has touched, which is exactly the set where `source` is not `verified`.
+  settledByUserId String?  @map("settled_by_user_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+
+  @@unique([partyId, label])
+  @@map("party_facts")
+}
+
 model AiEmployeeConfigurationVersion {
   id                  String    @id @default(cuid())
   aiEmployeeId        String    @map("ai_employee_id")
-  versionNumber        Int       @map("version_number")
-  status               String    @default("draft")
-  behaviorJson          Json      @map("behavior_json")
-  escalationRulesJson    Json      @map("escalation_rules_json")
-  operatingRulesJson     Json      @default("{}") @map("operating_rules_json")
-  createdBy             String?   @map("created_by")
-  createdAt              DateTime  @default(now()) @map("created_at")
-  deployedAt             DateTime? @map("deployed_at")
+  versionNumber       Int       @map("version_number")
+  status              String    @default("draft")
+  behaviorJson        Json      @map("behavior_json")
+  escalationRulesJson Json      @map("escalation_rules_json")
+  operatingRulesJson  Json      @default("{}") @map("operating_rules_json")
+  createdBy           String?   @map("created_by")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  deployedAt          DateTime? @map("deployed_at")
 
   aiEmployee AiEmployee @relation("EmployeeVersions", fields: [aiEmployeeId], references: [id], onDelete: Cascade)
 
   @@unique([aiEmployeeId, versionNumber])
   @@map("ai_employee_configuration_versions")
+}
+
+// ─────────────────────────────────────────────────────────────────── review
+
+/// A **cause** in the review queue, not an incident.
+///
+/// This is the whole point of the table, and the reason it is not just a
+/// `call_failures` log: forty-three callers hitting the same unanswerable
+/// question is one row here, not forty-three. `cause_key` is that identity —
+/// the kind of failure plus a canonical topic — and the unique constraint on
+/// it is what makes a second occurrence join the existing cause rather than
+/// open a duplicate beside it.
+///
+/// Severity is deliberately **not** a column. It is a function of the cause
+/// and how many calls it has now touched, so storing it would freeze a
+/// judgement that keeps moving underneath it — a cause filed "low" on its
+/// first call would still read "low" on its hundredth. `review.service`
+/// derives it on read, from the same counts the queue ranks by.
+model ReviewIssue {
+  id               String   @id @default(cuid())
+  workspaceId      String   @map("workspace_id")
+  aiEmployeeId     String?  @map("ai_employee_id")
+  /// Stable identity of the cause within a workspace. Two calls hitting the
+  /// same wall produce the same key, and therefore the same row.
+  causeKey         String   @map("cause_key")
+  /// missing_knowledge | policy_ambiguity | unclear_scope | tool_failure |
+  /// transcription_failure — the frontend's `IssueCause`, minus the values
+  /// nothing in this system can honestly detect yet.
+  cause            String
+  title            String
+  detail           String
+  /// open | in_progress | resolved | dismissed
+  status           String   @default("open")
+  firstSeenAt      DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt       DateTime @default(now()) @map("last_seen_at")
+  assignedToUserId String?  @map("assigned_to_user_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  workspace  Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  aiEmployee AiEmployee?        @relation(fields: [aiEmployeeId], references: [id], onDelete: SetNull)
+  events     ReviewIssueEvent[]
+
+  @@unique([workspaceId, causeKey])
+  @@index([workspaceId, status])
+  @@map("review_issues")
+}
+
+/// One occurrence of a cause — the evidence behind a row in the queue.
+///
+/// At most one per (issue, conversation), enforced by the service: a caller
+/// who asks the same unanswerable question three times in one call is one
+/// affected call, not three, and blast radius has to mean calls or it means
+/// nothing.
+///
+/// `detail` holds what was actually said, or what actually failed, verbatim.
+/// Someone deciding whether to change what their AI tells customers needs the
+/// caller's own words and the real error string, not a paraphrase of either.
+model ReviewIssueEvent {
+  id             String   @id @default(cuid())
+  issueId        String   @map("issue_id")
+  conversationId String?  @map("conversation_id")
+  detail         String?
+  detectedAt     DateTime @default(now()) @map("detected_at")
+
+  issue        ReviewIssue   @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([issueId, detectedAt])
+  @@index([conversationId])
+  @@map("review_issue_events")
 }
 
 // ─────────────────────────────────────────────────────────────────── audit

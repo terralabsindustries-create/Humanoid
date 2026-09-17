@@ -15,7 +15,43 @@ export type TwilioVoicePayload = {
   To?: string;
   SpeechResult?: string;
   Confidence?: string;
+  /** "inbound" | "outbound-api" | "outbound-dial". */
+  Direction?: string;
 };
+
+/**
+ * Which end of the call is the person, and which is us.
+ *
+ * `From` and `To` are not "caller" and "callee" — they are the two ends, and
+ * which one holds the human depends entirely on who dialled. On an inbound
+ * call the human is `From`; on an outbound one Twilio dials *from* the
+ * business number, so the human is `To` and reading `From` gives you your own
+ * Twilio number back.
+ *
+ * That is not hypothetical: it put the AI's own number on a booking, in the
+ * "Phone" field a human being is meant to ring back.
+ */
+export type CallParties = {
+  /** The person on the phone. */
+  human: string | null;
+  /** The business's own number — what a caller dialled, or what we dialled from. */
+  business: string | null;
+  direction: "inbound" | "outbound";
+};
+
+export function callParties(
+  direction: string | undefined,
+  from: string | undefined,
+  to: string | undefined,
+): CallParties {
+  // Twilio spells it "outbound-api" and "outbound-dial"; ConversationRelay's
+  // setup message just says "outbound".
+  const outbound = (direction ?? "").toLowerCase().startsWith("outbound");
+
+  return outbound
+    ? { human: to ?? null, business: from ?? null, direction: "outbound" }
+    : { human: from ?? null, business: to ?? null, direction: "inbound" };
+}
 
 /**
  * PUBLIC_BASE_URL wins over the request's own host because behind a tunnel
@@ -30,6 +66,31 @@ export function publicOrigin(request: FastifyRequest): string {
 let warnedAboutMissingToken = false;
 
 /**
+ * What the signature check saw, for diagnosing a 403 without ever touching a
+ * secret. Neither the Auth Token nor the signature itself appears here: the
+ * signature is a keyed digest of the request and belongs in no log.
+ *
+ * Twilio HMACs the URL it was *configured* with, so the usual cause of a
+ * genuine request being rejected is a mismatch between that and the URL
+ * reconstructed on this side. Logging both halves — the proxy headers that
+ * feed the reconstruction, and its result — is what makes that comparison
+ * possible from the log alone.
+ */
+function signatureDiagnostics(request: FastifyRequest, signaturePresent: boolean): Record<string, unknown> {
+  return {
+    signature: signaturePresent ? "PRESENT" : "MISSING",
+    protocol: request.protocol,
+    host: request.host,
+    url: request.url,
+    xForwardedProto: request.headers["x-forwarded-proto"] ?? null,
+    xForwardedHost: request.headers["x-forwarded-host"] ?? null,
+    reconstructedUrl: `${publicOrigin(request)}${request.url}`,
+    // Which branch of publicOrigin() produced it, without printing the value.
+    originSource: env.PUBLIC_BASE_URL ? "PUBLIC_BASE_URL" : "request (trustProxy)",
+  };
+}
+
+/**
  * Rejects anything that is not a genuine, untampered Twilio webhook.
  *
  * Fails closed in production. In development an unset TWILIO_AUTH_TOKEN
@@ -39,8 +100,8 @@ let warnedAboutMissingToken = false;
 export function verifyTwilioRequest(request: FastifyRequest, reply: FastifyReply, done: HookHandlerDoneFunction): void {
   const payload = (request.body ?? {}) as TwilioVoicePayload;
 
-  const reject = (logLine: string, message: string): void => {
-    request.log.warn(`Rejected Twilio webhook: ${logLine}`);
+  const reject = (logLine: string, message: string, diagnostics?: Record<string, unknown>): void => {
+    request.log.warn(diagnostics ?? {}, `Rejected Twilio webhook: ${logLine}`);
     // Replying without calling done() halts the request here.
     reply.code(403).send({ error: { code: "FORBIDDEN", message } });
   };
@@ -66,15 +127,24 @@ export function verifyTwilioRequest(request: FastifyRequest, reply: FastifyReply
 
   const signature = request.headers["x-twilio-signature"];
   if (typeof signature !== "string") {
-    reject("missing X-Twilio-Signature header", "Missing Twilio signature.");
+    // An absent header is a different fault from a wrong one: it means the
+    // caller is not Twilio's signed webhook path at all — a console test tool,
+    // a probe, or a hand-rolled request — rather than a URL mismatch.
+    reject("missing X-Twilio-Signature header", "Missing Twilio signature.", signatureDiagnostics(request, false));
     return;
   }
 
   const url = `${publicOrigin(request)}${request.url}`;
-  if (!twilio.validateRequest(env.TWILIO_AUTH_TOKEN, signature, url, payload as Record<string, string>)) {
+  const valid = twilio.validateRequest(env.TWILIO_AUTH_TOKEN, signature, url, payload as Record<string, string>);
+
+  request.log[valid ? "debug" : "warn"](
+    { ...signatureDiagnostics(request, true), validationResult: valid ? "PASS" : "FAIL" },
+    valid ? "Twilio signature validated" : "Rejected Twilio webhook: signature did not validate for this URL",
+  );
+
+  if (!valid) {
     // The URL is the usual culprit: it must match the Twilio Console entry
     // exactly, including scheme, host and query string.
-    request.log.warn({ url }, "Rejected Twilio webhook: signature did not validate for this URL");
     reply.code(403).send({ error: { code: "FORBIDDEN", message: "Invalid Twilio signature." } });
     return;
   }

@@ -9,13 +9,15 @@
     "start": "node --env-file=.env dist/server.js",
     "lint": "eslint .",
     "env:check": "bash scripts/check-env.sh",
+    "phone:assign": "tsx --env-file=.env scripts/assign-phone-number.ts",
+    "schedule:set": "tsx --env-file=.env scripts/set-schedule.ts",
     "test": "node --env-file=.env.test node_modules/vitest/vitest.mjs run",
     "test:watch": "node --env-file=.env.test node_modules/vitest/vitest.mjs",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:migrate:deploy": "prisma migrate deploy",
+    "db:generate": "node --env-file=.env node_modules/prisma/build/index.js generate",
+    "db:migrate": "node --env-file=.env node_modules/prisma/build/index.js migrate dev",
+    "db:migrate:deploy": "node --env-file=.env node_modules/prisma/build/index.js migrate deploy",
     "db:seed": "tsx --env-file=.env prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:studio": "node --env-file=.env node_modules/prisma/build/index.js studio"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.116.0",
@@ -24,6 +26,7 @@
     "@fastify/formbody": "^9.0.0",
     "@fastify/rate-limit": "^10.2.2",
     "@fastify/sensible": "^6.0.3",
+    "@fastify/websocket": "^11.3.0",
     "@prisma/client": "^6.3.1",
     "argon2": "^0.41.1",
     "fastify": "^5.2.1",
@@ -36,11 +39,13 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@types/ws": "^8.18.1",
     "eslint": "^9.18.0",
     "prisma": "^6.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.20.0",
-    "vitest": "^3.0.4"
+    "vitest": "^3.0.4",
+    "ws": "^8.21.3"
   }
 }

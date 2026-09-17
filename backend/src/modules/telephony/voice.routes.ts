@@ -1,17 +1,29 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import twilio from "twilio";
 import { env } from "@/config/env.js";
-import { publicOrigin, verifyTwilioRequest, type TwilioVoicePayload } from "@/modules/telephony/twilio-request.js";
 import {
+  callParties,
+  publicOrigin,
+  verifyTwilioRequest,
+  type TwilioVoicePayload,
+} from "@/modules/telephony/twilio-request.js";
+import {
+  createCallRecord,
   endConversation,
   greetingFor,
   isAiReceptionistEnabled,
   recordCallerTurn,
   replyTo,
-  resolveAiEmployee,
+  resolveEmployeeForCall,
   startConversation,
+  type RoutingBasis,
+  type ResolvedEmployee,
+  type StartCallContext,
 } from "@/modules/telephony/ai-receptionist.js";
 import { activeModel } from "@/modules/telephony/llm.js";
+import { VOICE_RELAY_PATH } from "@/modules/telephony/conversation-relay.js";
+import { mintVoiceToken } from "@/modules/telephony/voice-token.js";
+import { shouldAnswerCall } from "@/modules/usage/usage.service.js";
 
 type VoiceResponse = InstanceType<typeof twilio.twiml.VoiceResponse>;
 /** The SDK narrows this to a literal union of BCP-47 tags; ours comes from env. */
@@ -52,31 +64,71 @@ export function registerTwilioVoiceRoutes(app: FastifyInstance): void {
     const response = new twilio.twiml.VoiceResponse();
 
     // Resolved even without a model configured: a transcription-only call is
-    // still a real call and belongs in the record.
-    const employee = await resolveAiEmployee();
+    // still a real call and belongs in the record. Routed by the number the
+    // caller actually dialled, so the business that owns the line answers it.
+    // Route on the *business* end of the call, not blindly on `To`: an
+    // outbound call dials from the business number, so `To` is the human.
+    const parties = callParties(payload.Direction, payload.From, payload.To);
+    const routed = await resolveEmployeeForCall(parties.business ?? undefined);
+    const employee = routed?.employee ?? null;
 
     printBlock("[Twilio] Incoming call", [
       ["CallSid", payload.CallSid],
       ["From", payload.From],
       ["To", payload.To],
+      ["Caller", `${parties.human ?? "unknown"}  (${parties.direction})`],
+      ["Routed by", routed ? describeRouting(routed.basis) : undefined],
       [
         "Answered by",
         employee
-          ? `${employee.employeeName} — ${employee.businessName}  [${activeModel()}]`
+          ? `${employee.employeeName} — ${employee.businessName}  [${activeModel()}]` +
+            (useConversationRelay() ? `  via ConversationRelay / ${env.TWILIO_TTS_PROVIDER}` : "  via <Gather>")
           : isAiReceptionistEnabled()
             ? "transcription probe — no configured AI employee found"
             : "transcription probe — no model configured (set a provider key)",
       ],
     ]);
 
-    if (employee && payload.CallSid) {
-      await startConversation(payload.CallSid, employee, {
+    // The spend cap, enforced. Everything above this point still happened —
+    // the call was routed and logged — but a workspace that chose "stop
+    // answering" and has reached its budget does not get an AI employee on
+    // the line, which is the difference between a budget and a preference.
+    // `notify` deliberately falls through: that is what notify means.
+    const cap = employee ? await shouldAnswerCall(employee.workspaceId) : { answer: true as const };
+    if (employee && !cap.answer) {
+      printBlock("[Twilio] Call not answered — spend cap reached", [
+        ["Workspace", employee.businessName],
+        ["Behaviour", cap.behaviour],
+        ["Spend / budget", `${cap.spendMonth} / ${cap.budgetMonth} (minor units)`],
+      ]);
+      // Said, not silently hung up on. A caller who reaches a dead line learns
+      // nothing; this at least tells them the number works and to try another
+      // way. It deliberately does not mention money — that is the business's
+      // affair, not the caller's.
+      response.say(
+        `Thank you for calling ${employee.businessName}. ` +
+          "We are not able to take calls automatically at the moment. " +
+          "Please try again later, or contact us another way.",
+      );
+      response.hangup();
+      return sendTwiml(reply, response);
+    }
+
+    if (employee && payload.CallSid && useConversationRelay()) {
+      await connectConversationRelay(response, request, employee, payload.CallSid, {
         from: payload.From ?? "unknown",
         to: payload.To ?? "unknown",
+        direction: parties.direction,
+      });
+    } else if (employee && payload.CallSid) {
+      const caller = await startConversation(payload.CallSid, employee, {
+        from: payload.From ?? "unknown",
+        to: payload.To ?? "unknown",
+        direction: parties.direction,
       });
       // Greeting is built locally rather than generated, so the caller hears
       // something the instant they connect instead of waiting on a model.
-      appendSpeechGather(response, request, { turn: 1, misses: 0 }).say(greetingFor(employee));
+      appendSpeechGather(response, request, { turn: 1, misses: 0 }).say(greetingFor(employee, caller));
     } else {
       response.say("Hi. Please say something after the tone.");
       response.play({ digits: "1" });
@@ -158,6 +210,109 @@ export function registerTwilioVoiceRoutes(app: FastifyInstance): void {
       return sendTwiml(reply, response);
     },
   });
+}
+
+/** Spelled out in the call banner so a wrong tenant is obvious, not silent. */
+function describeRouting(basis: RoutingBasis): string {
+  switch (basis) {
+    case "phone_number":
+      return "the number dialled (workspace owns this line)";
+    case "env_pin":
+      return "AI_EMPLOYEE_WORKSPACE_ID";
+    case "most_recent":
+      return "MOST RECENTLY CONFIGURED EMPLOYEE — no workspace owns this number";
+  }
+}
+
+/**
+ * The realtime path needs both an employee to be and a model to think with.
+ * Without either, `<Gather>` still transcribes, which is the more useful
+ * degradation than a socket that connects and says nothing.
+ */
+function useConversationRelay(): boolean {
+  return env.VOICE_RELAY_ENABLED && isAiReceptionistEnabled();
+}
+
+/**
+ * Hands the call to Twilio ConversationRelay: one WebSocket for the whole
+ * call, with Twilio running speech recognition and ElevenLabs synthesis at its
+ * own end.
+ *
+ * The socket URL carries a signed token minted here rather than being
+ * guessable, because this webhook is the last point at which Twilio's own
+ * signature proves the request is genuine — see `voice-token.ts`.
+ */
+async function connectConversationRelay(
+  response: VoiceResponse,
+  request: FastifyRequest,
+  employee: ResolvedEmployee,
+  callSid: string,
+  context: StartCallContext,
+): Promise<void> {
+  const { conversationId, caller } = await createCallRecord(callSid, employee, context);
+
+  // Only the conversation id travels in the URL. The caller context stays on
+  // this side: it is the person's name and their bookings, and a query string
+  // is the wrong place for either.
+  const token = mintVoiceToken({
+    callSid,
+    workspaceId: employee.workspaceId,
+    employeeId: employee.employeeId,
+    conversationId,
+  });
+
+  const socketUrl = `${websocketOrigin(request)}/api/v1${VOICE_RELAY_PATH}?t=${encodeURIComponent(token)}`;
+  const voice = resolveVoice();
+
+  const relay = response.connect().conversationRelay({
+    url: socketUrl,
+    // Spoken by Twilio the instant the socket is up, with no round trip
+    // through this backend or the model — the caller hears a human-sounding
+    // sentence before any of our machinery has had to do anything.
+    welcomeGreeting: greetingFor(employee, caller),
+    ttsProvider: env.TWILIO_TTS_PROVIDER,
+    ...(voice ? { voice } : {}),
+    ...(env.TWILIO_TRANSCRIPTION_PROVIDER
+      ? { transcriptionProvider: env.TWILIO_TRANSCRIPTION_PROVIDER }
+      : {}),
+    ...(env.TWILIO_SPEECH_MODEL ? { speechModel: env.TWILIO_SPEECH_MODEL } : {}),
+    language: env.TWILIO_SPEECH_LANGUAGE,
+    // Barge-in. Without this the caller has to sit through every sentence the
+    // agent starts, which is the single thing that makes a voice agent feel
+    // like an IVR rather than a conversation.
+    interruptible: "true",
+    interruptSensitivity: env.VOICE_RELAY_INTERRUPT_SENSITIVITY,
+    welcomeGreetingInterruptible: "true",
+  });
+
+  // Carried as a TwiML parameter as well as in the URL: it arrives back in the
+  // `setup` message, which is where a future move off query-string tokens
+  // would read it from.
+  relay.parameter({ name: "callSid", value: callSid });
+}
+
+/**
+ * ConversationRelay only dials `wss://`. Derived from the same origin the
+ * webhook signature was validated against so both agree on the host.
+ */
+function websocketOrigin(request: FastifyRequest): string {
+  return publicOrigin(request).replace(/^http/, "ws");
+}
+
+/**
+ * The `voice` attribute ConversationRelay expects: for ElevenLabs a voice id,
+ * suffixed with `-<modelId>` when a model is pinned. Blank omits the attribute
+ * entirely, which is not the same as sending an empty one — Twilio then picks
+ * the provider's own default rather than failing to resolve a nameless voice.
+ *
+ * Deployment-wide today. It takes no tenant argument because `AiEmployee` has
+ * no voice column yet; when it gains one, this is the only place that changes,
+ * and every caller already has the employee to hand.
+ */
+function resolveVoice(): string | undefined {
+  const voiceId = env.ELEVENLABS_VOICE_ID;
+  if (!voiceId) return undefined;
+  return env.ELEVENLABS_MODEL_ID ? `${voiceId}-${env.ELEVENLABS_MODEL_ID}` : voiceId;
 }
 
 /**

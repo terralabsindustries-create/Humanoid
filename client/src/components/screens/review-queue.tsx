@@ -17,6 +17,7 @@ import {
   causeFacets,
   rankIssues,
   totalAffected,
+  type CauseFacet,
 } from "@/lib/domain/review";
 import { count, lower } from "@/lib/lexicon";
 import type {
@@ -36,9 +37,10 @@ import { useQuery } from "@tanstack/react-query";
  * of the business a cause is touching, and the facets in the rail cut by kind
  * of failure rather than by date.
  *
- * Nothing here writes. Judgement happens on this screen; the change itself is
- * made in Build, and the issue detail says so explicitly rather than offering a
- * button that would have to lie.
+ * The only writing this queue does is triage — moving a cause between the four
+ * tabs — and that happens on the issue itself. The repair does not: the change
+ * is made in Build, against a draft that has to simulate green, and the issue
+ * detail says so rather than offering a button that would have to lie.
  */
 
 const STATUS_ORDER: IssueStatus[] = [
@@ -119,12 +121,15 @@ export function ReviewQueue() {
         ))}
       </div>
 
+      {/* Above xl the rail holds the facets and this is only ever an
+          "undo"; below it, the chips are the filter itself. One affordance
+          at each width rather than two saying the same thing. */}
       {cause && (
         <button
           type="button"
           onClick={() => setCause(null)}
           className={cn(
-            "mt-3 inline-flex items-center gap-1.5 rounded-full bg-subtle px-2.5 py-1",
+            "mt-3 hidden items-center gap-1.5 rounded-full bg-subtle px-2.5 py-1 xl:inline-flex",
             "text-2xs font-medium text-muted transition-colors hover:text-ink",
             "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
           )}
@@ -133,6 +138,10 @@ export function ReviewQueue() {
           <X className="size-3" aria-hidden />
           <span className="sr-only">Clear this filter</span>
         </button>
+      )}
+
+      {facets.length > 1 && (
+        <CauseChips facets={facets} selected={cause} onSelect={setCause} />
       )}
 
       <div className="mt-4">
@@ -260,6 +269,50 @@ function StatusTab({
   );
 }
 
+/**
+ * The cause cut, for widths with no rail. Counts are conversations affected
+ * rather than issues, exactly as the rail states them — a chip reading 43 and
+ * a rail row reading 43 have to mean the same thing.
+ */
+function CauseChips({
+  facets,
+  selected,
+  onSelect,
+}: {
+  facets: CauseFacet[];
+  selected: IssueCause | null;
+  onSelect: (cause: IssueCause | null) => void;
+}) {
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-1.5 xl:hidden">
+      {facets.map((facet) => {
+        const active = facet.cause === selected;
+        return (
+          <button
+            key={facet.cause}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onSelect(active ? null : facet.cause)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1",
+              "text-2xs font-medium transition-colors",
+              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus",
+              active
+                ? "border-line-strong bg-accent-surface text-ink"
+                : "border-line text-muted hover:bg-subtle hover:text-ink",
+            )}
+          >
+            {CAUSE_LABEL[facet.cause]}
+            <span className="font-mono text-faint tabular">{facet.affected}</span>
+            {active && <X className="size-3" aria-hidden />}
+            {active && <span className="sr-only">Clear this filter</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function Rail({
   issues,
   facets,
@@ -267,7 +320,7 @@ function Rail({
   onSelect,
 }: {
   issues: ReviewIssue[];
-  facets: ReturnType<typeof causeFacets>;
+  facets: CauseFacet[];
   selected: IssueCause | null;
   onSelect: (cause: IssueCause | null) => void;
 }) {

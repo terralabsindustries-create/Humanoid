@@ -27,7 +27,7 @@ import {
 } from "@/lib/domain/labels";
 import { clockTime, dayAndTime, duration } from "@/lib/utils/time";
 import { lower } from "@/lib/lexicon";
-import type { Turn, User } from "@/lib/domain/types";
+import { isLiveStatus, type Turn, type User } from "@/lib/domain/types";
 
 /**
  * One conversation, in full: the transcript, and everything the AI did or a
@@ -48,6 +48,18 @@ export function ConversationDetail({ id }: { id: string }) {
   const query = useQuery({
     queryKey: qk.conversation(id),
     queryFn: () => service.getConversation(id),
+    /**
+     * A call in progress gains a turn every few seconds, and without this the
+     * transcript is frozen at whatever it was when the page opened — you had
+     * to reload to watch a conversation you are supposedly watching live.
+     *
+     * Polling stops the moment the call ends, so a finished transcript costs
+     * nothing. Two seconds is chosen against the pipeline it is following: a
+     * turn takes roughly a second of model time plus the caller speaking, so
+     * this lands new text about as fast as it is produced without hammering
+     * the API for a page that is often just left open.
+     */
+    refetchInterval: (q) => (q.state.data && isLiveStatus(q.state.data.status) ? 2_000 : false),
   });
 
   const partyId = query.data?.partyId ?? null;
@@ -67,7 +79,9 @@ export function ConversationDetail({ id }: { id: string }) {
   const listLabel = resolveNavLabel("conversations", lexicon.conversation.many, domainPack);
 
   const conversation = query.data;
-  const isLive = conversation?.status === "active";
+  // Ringing and wrapping are live too — a call being set up or torn down is
+  // still happening, and its transcript is still growing.
+  const isLive = conversation ? isLiveStatus(conversation.status) : false;
 
   const groupedTurns = useMemo(() => conversation?.turns ?? [], [conversation]);
 

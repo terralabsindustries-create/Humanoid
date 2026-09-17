@@ -225,6 +225,20 @@ export type ConversationStatus =
   | "wrapping"
   | "ended";
 
+/**
+ * A call that is still happening. Everything else is history.
+ *
+ * One definition, because three surfaces depend on agreeing: the live rail
+ * decides what to show, `listConversations({ live: true })` decides what to
+ * return, and the detail view decides whether to keep polling for new turns.
+ * If those drift, a call is live in one place and finished in another.
+ */
+export const LIVE_STATUSES: ConversationStatus[] = ["ringing", "active", "waiting", "wrapping"];
+
+export function isLiveStatus(status: ConversationStatus): boolean {
+  return LIVE_STATUSES.includes(status);
+}
+
 export type ConversationOutcome =
   | "resolved"
   | "escalated"
@@ -397,6 +411,14 @@ export type DomainRecord = {
   typeId: string;
   locationId: string;
   partyId: string | null;
+  /**
+   * The name this was taken under, when it differs from — or outlives — the
+   * directory record. A booking is a historical fact: renaming the person in
+   * the directory, or a second caller ringing from the same phone, must not
+   * silently rewrite whose table Thursday's booking is. Absent where the
+   * party record is the only name there ever was.
+   */
+  partyName?: string | null;
   status: string;
   /** Schema-driven; rendered by the archetype layout, labelled by the pack. */
   fields: Record<string, string | number | boolean | null>;
@@ -695,15 +717,56 @@ export type AuditEvent = {
   detail: string;
 };
 
+export type CapBehaviour = "notify" | "voicemail" | "stop";
+
+/**
+ * How a spend figure was arrived at.
+ *
+ * Present only where the money is metered from real calls, and absent for the
+ * Northgate fixture, which states an invoice for a business that does not
+ * exist. The distinction is the point: a metered number is units — connected
+ * minutes, model tokens — multiplied by rates an operator configured, and
+ * `/govern/usage` shows that working rather than asserting a total. Nothing in
+ * this system can read Twilio's or a model provider's actual invoice, and a
+ * screen about money must not imply otherwise.
+ */
+export type UsageMeter = {
+  /** Spend has reached the budget. What happens next is `atCap`'s business. */
+  capReached: boolean;
+  connectedMinutesMonth: number;
+  callsMonth: number;
+  resolvedCallsMonth: number;
+  /** Null when no call this month reported token counts — unknown, not zero. */
+  modelTokensMonth: number | null;
+  /** Calls whose token use nobody counted. */
+  unmeteredCalls: number;
+  rates: {
+    /** Minor units per connected minute: voice, transcription and speech together. */
+    voicePerMinute: number;
+    modelInputPerMillionTokens: number;
+    modelOutputPerMillionTokens: number;
+  };
+};
+
 export type UsageSnapshot = {
   /** Minor units, in workspace currency. */
   spendToday: number;
   spendMonth: number;
   budgetMonth: number | null;
   /** What happens at the cap. An explicit, visible choice. (§3.12) */
-  atCap: "notify" | "voicemail" | "stop";
+  atCap: CapBehaviour;
   callsToday: number;
   costPerResolution: number;
+  /** Null where spend is stated rather than metered. See `UsageMeter`. */
+  meter: UsageMeter | null;
+  /**
+   * Cap behaviours this deployment cannot carry out, and why — rendered with
+   * their reason rather than hidden, the same rule §3.11 sets for a hard block
+   * in the authority matrix. An option quietly dropped from the list cannot be
+   * asked about, so nobody wondering "can overflow calls go to voicemail?"
+   * would ever get an answer.
+   */
+  capBlocked: Partial<Record<CapBehaviour, string>>;
 };
 
 /** Real-time transport health. Degraded is a designed state, not a toast. */
